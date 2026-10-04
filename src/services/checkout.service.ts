@@ -3,7 +3,7 @@ import { CustomError } from "../errors/customError.error";
 import { Lead } from "../models/lead.model";
 import { PAYMENT_METHODS, PaymentMethod } from "../models/order.model";
 import { Product } from "../models/product.model";
-import { getSettings, ISettings } from "../models/setting.model";
+import { getSettings, ISettings, transfersEnabled } from "../models/setting.model";
 import { normalizeEcPhone } from "../utils/phone";
 
 export const MAX_UNITS_PER_LINE = 10;
@@ -36,7 +36,12 @@ export interface QuoteResult {
   total: number;
   items: QuoteLine[];
   surcharges: Record<PaymentMethod, number>;
+  /** Formas de pago que se pueden elegir hoy (transferencia depende del panel). */
+  available: Record<PaymentMethod, boolean>;
 }
+
+export const TRANSFERS_OFF =
+  "Por ahora no recibimos transferencias. Elige tarjeta o contra entrega";
 
 export function parsePaymentMethod(value: unknown, fallback?: PaymentMethod): PaymentMethod {
   if ((value === undefined || value === null || value === "") && fallback) return fallback;
@@ -64,6 +69,10 @@ export function parseCartItems(raw: unknown): CartItemInput[] {
     const variantId = item?.variantId ? String(item.variantId) : null;
     return { productId, variantId, quantity };
   });
+}
+
+export function availableMethods(settings: ISettings): Record<PaymentMethod, boolean> {
+  return { card: true, cod: true, transfer: transfersEnabled(settings) };
 }
 
 export function surchargesFor(settings: ISettings): Record<PaymentMethod, number> {
@@ -96,6 +105,8 @@ export async function buildQuote(rawItems: unknown, rawMethod: unknown): Promise
   const cart = parseCartItems(rawItems);
   const paymentMethod = parsePaymentMethod(rawMethod, "card");
   const settings = await getSettings();
+  const available = availableMethods(settings);
+  if (!available[paymentMethod]) throw new CustomError(TRANSFERS_OFF, 400);
 
   const ids = Array.from(new Set(cart.map((i) => i.productId)));
   const products = await Product.find({ _id: { $in: ids } }).lean();
@@ -154,6 +165,7 @@ export async function buildQuote(rawItems: unknown, rawMethod: unknown): Promise
     total: subtotal + shippingFee + surcharge,
     items,
     surcharges,
+    available,
   };
 }
 
