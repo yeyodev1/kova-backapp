@@ -18,6 +18,7 @@ import { normalizeEcPhone } from "../utils/phone";
 import { buildQuote, parsePaymentMethod, TRANSFERS_OFF } from "./checkout.service";
 import { uploadFile } from "./cloudinary.service";
 import * as dropiService from "./dropi.service";
+import { reportIncident, resolveIncidents } from "./incidents.service";
 import { notifyOrder } from "./orderNotifications.service";
 import * as payphoneService from "./payphone.service";
 import { accountsForOrder, resolveTransferAccount } from "./payments.service";
@@ -371,7 +372,19 @@ export async function confirmPayphone(id: unknown, clientTransactionId: unknown)
   if (order.paymentStatus === "paid") return { order: toPublicOrder(order), approved: true };
   if (order.status === "cancelled") return { order: toPublicOrder(order), approved: false };
 
-  const data = await payphoneService.confirm(payphoneId, txId);
+  let data: any;
+  try {
+    data = await payphoneService.confirm(payphoneId, txId);
+  } catch (error: any) {
+    void reportIncident({
+      type: "payment_failed",
+      severity: "high",
+      title: "Payphone no pudo confirmar un pago con tarjeta",
+      detail: `Transacción ${payphoneId} (${txId}): ${error?.message || "sin respuesta"}. Revisa en Payphone si el cobro existe antes de que se reverse.`,
+      order,
+    });
+    throw error;
+  }
   const statusCode = Number(data?.statusCode);
   const amountMatches = Number(data?.amount) === order.total;
   const txMatches = !data?.clientTransactionId || data.clientTransactionId === txId;
@@ -399,6 +412,11 @@ export async function confirmPayphone(id: unknown, clientTransactionId: unknown)
     const fresh = await Order.findById(order._id);
     // Solo quien ganó la transición avisa: recargar la respuesta no repite el correo.
     if (updated) notifyOrder("paid", fresh);
+    void resolveIncidents(
+      order._id,
+      ["payment_failed", "payment_mismatch"],
+      "Resuelta sola: Payphone confirmó el pago.",
+    );
     return { order: toPublicOrder(fresh), approved: true };
   }
 
@@ -412,6 +430,13 @@ export async function confirmPayphone(id: unknown, clientTransactionId: unknown)
         `Payphone aprobó ${data?.amount} pero el pedido es ${order.total}: revisar`,
       ),
     );
+    void reportIncident({
+      type: "payment_mismatch",
+      severity: "high",
+      title: "Payphone aprobó un monto distinto al del pedido",
+      detail: `Payphone aprobó ${data?.amount} centavos y el pedido es de ${order.total}. El pedido no se marcó como pagado: revisa el cobro en Payphone.`,
+      order,
+    });
   } else if (statusCode === payphoneService.PAYPHONE_CANCELED) {
     order.status = "failed";
     order.paymentStatus = "failed";
@@ -538,6 +563,11 @@ export async function confirmTransfer(id: string) {
   }
   const fresh = await Order.findById(order._id);
   if (updated) notifyOrder("paid", fresh);
+  void resolveIncidents(
+    order._id,
+    ["receipt_review_stale"],
+    "Resuelta sola: se confirmó la transferencia.",
+  );
   return fresh.toObject();
 }
 
@@ -577,6 +607,13 @@ export async function sendToDropi(id: string) {
   await linkItemsToDropi(order);
   const missing = order.items.find((item: any) => !item.dropiId);
   if (missing) {
+    void reportIncident({
+      type: "dropi_error",
+      severity: "high",
+      title: "No se pudo pasar el pedido a Dropi",
+      detail: `El producto ${missing.title} no está enlazado a Dropi. Agrega su ID en el panel y reintenta, o créalo a mano en Dropi.`,
+      order,
+    });
     throw new CustomError(
       `El producto ${missing.title} no está enlazado a Dropi: agrega su ID en el panel`,
       400,
@@ -641,9 +678,21 @@ export async function sendToDropi(id: string) {
       },
       { new: true },
     );
+    void resolveIncidents(
+      order._id,
+      ["dropi_error"],
+      `Resuelta sola: creado en Dropi #${created.id}.`,
+    );
     return updated.toObject();
   } catch (error: any) {
     const message = String(error?.message || "Error desconocido de Dropi");
+    void reportIncident({
+      type: "dropi_error",
+      severity: "high",
+      title: "Dropi rechazó el pedido",
+      detail: `${message}. Reintenta desde el pedido o créalo a mano en Dropi.`,
+      order,
+    });
     await Order.updateOne(
       { _id: order._id },
       {
