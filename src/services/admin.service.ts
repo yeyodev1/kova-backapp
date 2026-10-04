@@ -4,6 +4,7 @@ import { Lead } from "../models/lead.model";
 import { ORDER_STATUSES, Order, PAYMENT_METHODS } from "../models/order.model";
 import { Product } from "../models/product.model";
 import { getSettings, Setting } from "../models/setting.model";
+import { defaultOffers } from "../utils/pricing";
 import { escapeRegex } from "../utils/regex";
 import { slugify } from "../utils/slugify";
 import { uploadBuffer } from "./cloudinary.service";
@@ -179,9 +180,80 @@ function stringList(value: unknown, field: string, max = 20): string[] {
     .slice(0, max);
 }
 
+/** Id de Dropi opcional: entero positivo, o null/"" para desenlazar. */
+function dropiIdOrNull(value: unknown, field: string): number | null {
+  if (value === null || value === "" || value === undefined) return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new CustomError(`${field} debe ser un número entero positivo`, 400);
+  }
+  return n;
+}
+
+async function assertDropiIdFree(dropiId: number, excludeId?: unknown) {
+  const filter: Record<string, unknown> = { dropiId };
+  if (excludeId) filter._id = { $ne: excludeId };
+  const other: any = await Product.findOne(filter).select("title").lean();
+  if (other) {
+    throw new CustomError(`El ID de Dropi ${dropiId} ya está enlazado a "${other.title}"`, 409);
+  }
+}
+
+async function uniqueSlug(base: string): Promise<string> {
+  const root = slugify(base) || "producto";
+  let candidate = root;
+  for (let i = 2; await Product.exists({ slug: candidate }); i++) candidate = `${root}-${i}`;
+  return candidate;
+}
+
+/**
+ * Producto creado a mano: sirve mientras la API de Dropi no esté habilitada.
+ * Si se enlaza con su ID de Dropi, la sincronización y los pedidos funcionan igual que importado.
+ */
+export async function createProduct(body: any) {
+  const input = body ?? {};
+  const title = String(input.title ?? "").trim().slice(0, 200);
+  if (!title) throw new CustomError("Ponle un título al producto", 400);
+
+  const dropiId = dropiIdOrNull(input.dropiId, "El ID de Dropi");
+  if (dropiId) await assertDropiIdFree(dropiId);
+
+  const price = input.price ? cents(input.price, "El precio") : 0;
+  const product = await Product.create({
+    title,
+    slug: await uniqueSlug(input.slug ? String(input.slug) : title),
+    shortDescription: String(input.shortDescription ?? "").slice(0, 300),
+    description: input.description ? sanitizeDescription(input.description) : "",
+    category: String(input.category ?? "")
+      .trim()
+      .slice(0, 80),
+    images: input.images ? stringList(input.images, "Las imágenes", 30) : [],
+    price,
+    compareAtPrice: input.compareAtPrice ? cents(input.compareAtPrice, "El precio tachado", true) : 0,
+    costPrice: input.costPrice ? cents(input.costPrice, "El costo del proveedor", true) : 0,
+    offers: price ? defaultOffers(price) : [],
+    isPublished: false,
+    ...(dropiId ? { dropiId } : {}),
+  });
+  return product.toObject();
+}
+
 export async function updateProduct(id: string, body: any) {
   const product = await findProductOr404(id);
   const input = body ?? {};
+
+  if (input.dropiId !== undefined) {
+    const dropiId = dropiIdOrNull(input.dropiId, "El ID de Dropi");
+    if (dropiId) {
+      await assertDropiIdFree(dropiId, product._id);
+      product.dropiId = dropiId;
+    } else {
+      // undefined y no null: el índice único sparse solo ignora documentos sin el campo.
+      product.dropiId = undefined;
+    }
+  }
+  if (input.costPrice !== undefined)
+    product.costPrice = cents(input.costPrice, "El costo del proveedor", true);
 
   if (input.title !== undefined) {
     const title = String(input.title).trim();
@@ -228,6 +300,14 @@ export async function updateProduct(id: string, body: any) {
       if (change.name !== undefined) variant.name = String(change.name).trim().slice(0, 120);
       if (change.price !== undefined)
         variant.price = cents(change.price, "El precio de la variante");
+      if (change.dropiVariationId !== undefined) {
+        variant.dropiVariationId = dropiIdOrNull(
+          change.dropiVariationId,
+          "El ID de variación de Dropi",
+        );
+      }
+      if (change.costPrice !== undefined)
+        variant.costPrice = cents(change.costPrice, "El costo de la variante", true);
       if (change.compareAtPrice !== undefined) {
         variant.compareAtPrice = cents(
           change.compareAtPrice,
