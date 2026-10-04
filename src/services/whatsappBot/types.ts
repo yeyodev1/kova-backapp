@@ -75,6 +75,8 @@ export interface BotState {
   orderId: string;
   orderNumber: string;
   lastQuestion: string;
+  /** Pedidos listados al preguntar "cuál?" (para responder "el 2" o "KV-1003"). */
+  orderChoices: string[];
 }
 
 export const createInitialState = (): BotState => ({
@@ -104,6 +106,7 @@ export const createInitialState = (): BotState => ({
   orderId: "",
   orderNumber: "",
   lastQuestion: "",
+  orderChoices: [],
 });
 
 /**
@@ -224,6 +227,19 @@ export interface OrderSummary {
   guide: string;
   carrier: string;
   paymentLink: string;
+  /** ISO: para "mi pedido de ayer". */
+  createdAt: string;
+  /** Celular del pedido (el del chat): arma el link de rastreo. */
+  phone: string;
+  /** "2 x Licuadora Oster, 1 x Cargador". */
+  items: string;
+}
+
+/** Cómo buscar pedidos: siempre dentro de los del teléfono del chat. */
+export interface OrderQuery {
+  number?: string;
+  idNumber?: string;
+  email?: string;
 }
 
 export interface CardCheck {
@@ -244,7 +260,7 @@ export interface BotDeps {
   /** Verifica con Payphone el pago con tarjeta del pedido del chat (o el último del teléfono). */
   checkCardPayment: (orderId: string) => Promise<CardCheck | null>;
   /** Pedidos del teléfono del chat, o el pedido con ese número si es de este teléfono. */
-  findOrders: (orderNumber?: string) => Promise<OrderSummary[]>;
+  findOrders: (query?: OrderQuery) => Promise<OrderSummary[]>;
   /** Carrito abandonado: como el checkout de la web. Nunca bloquea. */
   saveLead: (state: BotState) => void;
   banks: BankOption[];
