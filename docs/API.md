@@ -234,3 +234,18 @@ Si Dropi rechaza por IP, cualquier endpoint que le pegue responde 502 con
 
 - `GET /api/cron/dropi-orders` cada hora: sincroniza estados y guías de Dropi.
 - `GET /api/cron/dropi-products` cada 6 horas: refresca stock y costo.
+
+## Payphone (Cajita de Pagos)
+
+Doc oficial: https://docs.payphone.app/cajita-de-pagos
+
+- **Payphone Developer** (aplicación tipo WEB): dominio `https://kovashopper.com` y URL de respuesta
+  `https://kovashopper.com/pay-response`. La URL no se pasa por código: Payphone la toma de ahí.
+- `POST /orders` con `paymentMethod: "card"` devuelve `payphone` con lo que pide la Cajita: `token`, `storeId`,
+  `clientTransactionId`, `amount = amountWithoutTax` (centavos, sin IVA desglosado), `amountWithTax/tax/service/tip = 0`,
+  `reference`, `email`, `phoneNumber` (+593…), `documentId` + `identificationType` (1 cédula, 2 RUC) si el cliente la dio,
+  y `optionalParameter` = número de pedido.
+- Payphone redirige a `/pay-response?id=<transacción>&clientTransactionId=<nuestro id>`. La página llama apenas carga a
+  `POST /orders/confirm` (Payphone reversa a los 5 minutos sin confirmación), reintenta sola si falla la red, y solo
+  muestra "rechazado" si Payphone o el servidor lo dicen. La confirmación es idempotente y valida el monto.
+- `/pago/respuesta` (ruta anterior) redirige a `/pay-response` conservando la query.
