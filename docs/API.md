@@ -171,6 +171,10 @@ tarjeta, y también sirve para la web (`order.payToken` viene en la respuesta de
 
 Endpoints `/whatsapp-bot/*` para BuilderBot y `/whatsapp-bot/admin/*` para el panel: ver `docs/WHATSAPP-BOT.md`.
 
+| Método | Ruta | Respuesta |
+|---|---|---|
+| GET | `/whatsapp-bot/admin/conversations/:phone?before&limit` | (admin) `{ phone, session, messages: [{ id, at, role: "client" \| "bot" \| "system", text, mediaUrl?, kind?, meta?: { endpoint, route, decision, step, ms, error, orderNumber, paymentLink, brain? }, source }], hasMore, nextBefore }` — chat completo con las decisiones del bot, paginado hacia atrás con `before` |
+
 ## SEO
 
 | Método | Ruta | Respuesta |
