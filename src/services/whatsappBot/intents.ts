@@ -155,6 +155,19 @@ export function extractQuantity(text: string): number | null {
   return word ? word[1] : null;
 }
 
+/**
+ * Respuesta corta en el paso de cantidad: "una sola", "solo una", "uno nomás", "las dos", "tres".
+ * Aquí "una" sí es una cantidad, a diferencia de "quiero una licuadora" en una búsqueda.
+ */
+export function quantityAnswer(text: string): number | null {
+  const value = normalize(text).replace(/[!.?,]/g, " ").replace(/\s+/g, " ").trim();
+  if (/^(?:solo |sola |nomas )?(?:un|una|uno|1)(?: sola| solo| solita| nomas| no mas| unidad)?(?: nomas| no mas| porfa| por favor| gracias)?$/.test(value)) return 1;
+  if (/^(?:solo )?(?:una|uno|1) (?:sola|solo)$/.test(value)) return 1;
+  const words: Record<string, number> = { dos: 2, tres: 3, cuatro: 4, cinco: 5 };
+  const match = value.match(/^(?:las |los |solo |quiero |dame )?(dos|tres|cuatro|cinco)(?: unidades| porfa| por favor)?$/);
+  return match ? words[match[1]] : null;
+}
+
 /** "KV-1001", "kv 1001", "pedido 1001". */
 export function orderNumberIn(text: string) {
   const match =
