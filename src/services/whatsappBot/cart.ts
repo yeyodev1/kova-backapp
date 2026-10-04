@@ -1,6 +1,6 @@
 import { BotProduct, formatCents, productLine } from "./catalog";
 import { askNext } from "./checkout";
-import { extractChoice, extractQuantity, normalize } from "./intents";
+import { extractChoice, extractQuantity, isYes, normalize, quantityAnswer } from "./intents";
 import { reply } from "./reply";
 import { cartText } from "./texts";
 import type { BotDeps, BotState, TurnResult } from "./types";
@@ -220,7 +220,9 @@ export async function handlePendingStep(
     const stock = stockOf(product, pending.variantId);
     const explicit = /unidad|\bx\s?\d/.test(normalize(message)) ? extractQuantity(message) : null;
     const choice = extractChoice(message, state.quantityOptions.length);
-    let quantity = explicit || (choice ? state.quantityOptions[choice - 1] : null);
+    // "una sola", "las dos": palabras de cantidad. Un "sí" a secas se toma como 1 unidad.
+    const spoken = quantityAnswer(message) ?? (isYes(message) ? 1 : null);
+    let quantity = explicit || spoken || (choice ? state.quantityOptions[choice - 1] : null);
     // "5" cuando solo se ofrecieron 3 opciones: es la cantidad.
     if (!quantity) {
       const raw = extractQuantity(message);
