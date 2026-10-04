@@ -68,3 +68,62 @@ export async function notifyHumanRequest(request: HumanRequest): Promise<void> {
     console.error("[alertas] no se pudo avisar del asesor:", error?.message);
   }
 }
+
+interface IncidentAlert {
+  _id: unknown;
+  number: string;
+  title: string;
+  detail?: string;
+  orderNumber?: string;
+  order?: unknown;
+  phone?: string;
+  customerName?: string;
+}
+
+/**
+ * Incidencia de severidad alta recién abierta: aviso a los administradores con el aviso
+ * de pedidos encendido. Solo la primera vez (las repeticiones suman "×N" en el panel).
+ * Nunca lanza.
+ */
+export async function notifyIncident(incident: IncidentAlert): Promise<void> {
+  try {
+    const recipients = await teamRecipients("orders");
+    if (!recipients.length) return;
+
+    const base = env.FRONTEND_URL.replace(/\/+$/, "");
+    const who = [incident.customerName, incident.phone].filter(Boolean).join(" · ");
+    const buttons = [
+      emailButton("Ver incidencia", `${base}/admin/incidencias?id=${String(incident._id)}`),
+      incident.order
+        ? emailButton("Ver pedido", `${base}/admin/pedidos/${String(incident.order)}`, "#4a6e58")
+        : "",
+      incident.phone
+        ? emailButton(
+            "WhatsApp del cliente",
+            `https://wa.me/${waNumber(incident.phone)}`,
+            "#1f9d55",
+          )
+        : "",
+    ].join("");
+    const html = layout(
+      `Incidencia ${incident.number}`,
+      paragraph(`<strong>${escapeHtml(incident.title)}</strong>`) +
+        (who || incident.orderNumber
+          ? paragraph(
+              `<span style="font-size:13px;color:#6b746e">${escapeHtml([incident.orderNumber, who].filter(Boolean).join(" · "))}</span>`,
+            )
+          : "") +
+        (incident.detail ? infoBox(escapeHtml(incident.detail)) : "") +
+        `<div style="margin:8px 0 16px">${buttons}</div>`,
+      {
+        preheader: incident.title,
+        footer:
+          "Recibes este aviso porque tienes activados los avisos de pedidos en Panel → Ajustes → Avisos por correo.",
+      },
+    );
+    const subject = `Incidencia ${incident.number}: ${incident.title}${incident.orderNumber ? ` · ${incident.orderNumber}` : ""}`;
+    await Promise.all(recipients.map((to) => sendEmail(to, subject, html)));
+  } catch (error: any) {
+    console.error("[alertas] no se pudo avisar de la incidencia:", error?.message);
+  }
+}
