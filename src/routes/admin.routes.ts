@@ -2,6 +2,7 @@ import { NextFunction, Request, Response, Router } from "express";
 import multer from "multer";
 import * as adminController from "../controllers/admin.controller";
 import * as dropiController from "../controllers/dropi.controller";
+import * as incidentController from "../controllers/incident.controller";
 import { adminMiddleware } from "../middlewares/admin.middleware";
 import { authMiddleware } from "../middlewares/auth.middleware";
 import { uploadMiddleware } from "../middlewares/upload.middleware";
@@ -62,6 +63,14 @@ router.post("/orders/:id/send-to-dropi", adminController.sendToDropi);
 router.post("/orders/:id/cancel", adminController.cancelOrder);
 
 router.get("/leads", adminController.listLeads);
+
+router.get("/incidents", incidentController.list);
+// Antes de /incidents/:id para que "summary" no se tome como id.
+router.get("/incidents/summary", incidentController.summary);
+router.get("/incidents/:id", incidentController.get);
+router.post("/incidents", incidentController.create);
+router.put("/incidents/:id", incidentController.update);
+router.post("/incidents/:id/notes", incidentController.addNote);
 
 router.get("/settings", adminController.getSettings);
 router.put("/settings", adminController.updateSettings);
