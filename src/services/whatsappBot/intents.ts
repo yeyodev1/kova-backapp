@@ -35,7 +35,7 @@ export const wantsHuman = (text: string) =>
   has(
     text,
     /\b(asesor|asesora|humano|persona real|agente|alguien real|hablar con alguien|vendedor|reclamo|queja|estafa|devolucion|devolver|garantia|reembolso)\b/,
-  );
+  ) || isComplaint(text);
 
 export const wantsCatalog = (text: string) =>
   has(
@@ -43,11 +43,40 @@ export const wantsCatalog = (text: string) =>
     /\b(catalogo|que (productos )?tienen|que venden|productos|ofertas|lista de precios|menu)\b/,
   );
 
+/**
+ * Consulta por un pedido: "cómo va mi pedido", "dónde está mi paquete", "ya me llegó?",
+ * "no me ha llegado", "KV-1001", "mi pedido de ayer".
+ */
 export const wantsTracking = (text: string) =>
   has(
     text,
-    /\b(mi pedido|mis pedidos|estado de(l)? (mi )?pedido|mi orden|mi compra|ya transferi|cuando llega|seguimiento|rastrear|rastreo|guia|numero de pedido|kv-?\s?\d+)\b/,
+    /\b(mi pedido|mis pedidos|estado de(l)? (mi |el )?(pedido|envio|paquete|orden|compra)|mi orden|mi compra|mis compras|mi paquete|mi envio|ya transferi|cuando (me )?llega|ya (me )?llego|me llego|no (me )?(ha )?llegado|(todavia|aun) no (me )?llega|donde (esta|va|viene|anda) (mi|el) (pedido|paquete|compra|orden|envio|producto)|como va (mi|el)|seguimiento|rastrear|rastreo|guia|numero de pedido|kv-?\s?\d+)\b/,
   );
+
+/** Con "mi/mis" o un KV- la consulta es sobre SU pedido; "cuándo llega?" solo puede ser una duda previa. */
+export const explicitTracking = (text: string) =>
+  Boolean(orderNumberIn(text)) ||
+  has(text, /\b(mi|mis|me llego|no (me )?(ha )?llegado|ya transferi|guia|rastre\w*)\b/);
+
+/**
+ * Reclamo: garantía, devolución, producto dañado o que no funciona. Pasa a una persona
+ * y queda como incidencia para el equipo.
+ */
+export function isComplaint(text: string) {
+  const value = normalize(text);
+  if (
+    /\b(reclamo|queja|estafa|estafaron|devolucion|devolver|garantia|reembolso|danad[oa]s?|roto|rota|rotos|rotas|defectuos[oa]s?|vino (mal|abierto|incompleto|vacio)|llego (mal|abierto|incompleto|vacio|equivocado|otro)|me llego otro|no es lo que (pedi|compre)|producto (malo|falso|equivocado))\b/.test(
+      value,
+    )
+  ) {
+    return true;
+  }
+  // "no funciona / no prende" es reclamo si habla del producto, no del link de pago o la web.
+  return (
+    /\bno (funciona|sirve|prende|enciende|carga)\b/.test(value) &&
+    !/\b(link|enlace|pago|pagina|web|tarjeta|codigo|app|boton)\b/.test(value)
+  );
+}
 
 export const wantsCancel = (text: string) =>
   has(
@@ -160,11 +189,21 @@ export function extractQuantity(text: string): number | null {
  * Aquí "una" sí es una cantidad, a diferencia de "quiero una licuadora" en una búsqueda.
  */
 export function quantityAnswer(text: string): number | null {
-  const value = normalize(text).replace(/[!.?,]/g, " ").replace(/\s+/g, " ").trim();
-  if (/^(?:solo |sola |nomas )?(?:un|una|uno|1)(?: sola| solo| solita| nomas| no mas| unidad)?(?: nomas| no mas| porfa| por favor| gracias)?$/.test(value)) return 1;
+  const value = normalize(text)
+    .replace(/[!.?,]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (
+    /^(?:solo |sola |nomas )?(?:un|una|uno|1)(?: sola| solo| solita| nomas| no mas| unidad)?(?: nomas| no mas| porfa| por favor| gracias)?$/.test(
+      value,
+    )
+  )
+    return 1;
   if (/^(?:solo )?(?:una|uno|1) (?:sola|solo)$/.test(value)) return 1;
   const words: Record<string, number> = { dos: 2, tres: 3, cuatro: 4, cinco: 5 };
-  const match = value.match(/^(?:las |los |solo |quiero |dame )?(dos|tres|cuatro|cinco)(?: unidades| porfa| por favor)?$/);
+  const match = value.match(
+    /^(?:las |los |solo |quiero |dame )?(dos|tres|cuatro|cinco)(?: unidades| porfa| por favor)?$/,
+  );
   return match ? words[match[1]] : null;
 }
 
