@@ -89,7 +89,7 @@ export async function addProductImage(req: Request, res: Response, next: NextFun
 
 // ── Pedidos ─────────────────────────────────────────────────────────────────
 
-/** GET /api/admin/orders?status&paymentMethod&q&page */
+/** GET /api/admin/orders?status&paymentMethod&q&page&dropiError&todo */
 export async function listOrders(req: Request, res: Response, next: NextFunction) {
   try {
     res.status(200).json(await adminService.listOrders(req.query));
@@ -206,7 +206,7 @@ export async function listTeam(_req: Request, res: Response, next: NextFunction)
   }
 }
 
-/** PUT /api/admin/team/:id  { notifyHumanRequests } */
+/** PUT /api/admin/team/:id  { notifyOrders?, notifyHumanRequests? } */
 export async function updateTeamMember(req: Request, res: Response, next: NextFunction) {
   try {
     res.status(200).json(await adminService.updateTeamMember(String(req.params.id), req.body));
