@@ -8,6 +8,7 @@ import locationRoutes from "./location.routes";
 import checkoutRoutes from "./checkout.routes";
 import orderRoutes from "./order.routes";
 import adminRoutes from "./admin.routes";
+import paymentsRoutes from "./payments.routes";
 import seoRoutes from "./seo.routes";
 import whatsappBotRoutes from "./whatsappBot.routes";
 
@@ -23,6 +24,8 @@ function routerApi(app: Application) {
   router.use("/locations", locationRoutes);
   router.use("/checkout", checkoutRoutes);
   router.use("/orders", orderRoutes);
+  // Antes de /admin para no pasar dos veces por su auth.
+  router.use("/admin/payments", paymentsRoutes);
   router.use("/admin", adminRoutes);
   router.use("/seo", seoRoutes);
   router.use("/whatsapp-bot", whatsappBotRoutes);
