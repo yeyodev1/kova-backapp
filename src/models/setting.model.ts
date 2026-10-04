@@ -1,7 +1,8 @@
 import mongoose, { Schema, Types } from "mongoose";
 import { guessBankCode } from "../services/banks";
 
-export const BANK_ACCOUNT_TYPES = ["Ahorros", "Corriente"] as const;
+// "Transaccional" es como Banco Pichincha llama a su cuenta básica.
+export const BANK_ACCOUNT_TYPES = ["Ahorros", "Corriente", "Transaccional"] as const;
 
 export interface IBankAccount {
   _id?: Types.ObjectId | string;
