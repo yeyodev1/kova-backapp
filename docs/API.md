@@ -76,8 +76,21 @@ interface Settings {
   freeShippingFrom: number;    // centavos, 0 = no aplica
   announcement: string;        // barra superior
   whatsapp: string;            // solo dígitos: 593997011366
-  bankAccounts: { bank: string; type: string; number: string; holder: string; idNumber: string }[];
+  acceptTransfers: boolean;    // interruptor de /admin/pagos (público: true solo si además hay cuentas activas)
+  bankAccounts: BankAccount[]; // público: solo activas, y [] si acceptTransfers es false
   defaultMarkupPercent: number; // margen sugerido al importar de Dropi
+}
+
+interface BankAccount {
+  _id: string;
+  bank: string;      // nombre visible ("Banco Pichincha")
+  bankCode: string;  // clave del catálogo (services/banks.ts): "pichincha", "guayaquil", "produbanco"… u "otro"
+  type: "Ahorros" | "Corriente" | "Transaccional";
+  number: string;    // solo dígitos
+  holder: string;
+  idNumber: string;  // cédula (10) o RUC (13)
+  active: boolean;   // solo admin; las pausadas nunca salen en la web, correos ni bot
+  logoUrl: string;   // Google favicons por dominio del banco, o "" (el front muestra un ícono)
 }
 
 interface Province { id: number; name: string }
@@ -127,7 +140,7 @@ interface Order {
 | GET | `/products/:slug` | — | `Product` + `related: Product[]` (máx 4) |
 | GET | `/locations/provinces` | — | `Province[]` (cacheado de Dropi) |
 | GET | `/locations/provinces/:id/cities` | — | `City[]` |
-| POST | `/checkout/quote` | `{ items: [{ productId, variantId?, quantity }], paymentMethod }` | `{ subtotal, shippingFee, surcharge, total, items: OrderItem[], surcharges: { card, cod, transfer } }` |
+| POST | `/checkout/quote` | `{ items: [{ productId, variantId?, quantity }], paymentMethod }` | `{ subtotal, shippingFee, surcharge, total, items: OrderItem[], surcharges: { card, cod, transfer }, available: { card, cod, transfer } }`. `paymentMethod: "transfer"` con transferencias apagadas → 400 |
 | POST | `/checkout/lead` | `{ phone, firstName?, items }` | `{ ok: true }` (carrito abandonado: recuperación por WhatsApp) |
 | POST | `/orders` | `{ items, paymentMethod, customer, address, notes?, utm? }` | `{ order: Order, payphone?: { token, storeId, clientTransactionId, amount, amountWithoutTax, currency: "USD", reference, email, phoneNumber } }` |
 | POST | `/orders/confirm` | `{ id, clientTransactionId }` | `{ order: Order, approved: boolean }` (idempotente; acepta cualquier `clientTransactionId` del historial del pedido) |
@@ -139,7 +152,11 @@ Reglas de `POST /orders`:
 - Recalcula precios desde la base (ignora precios del cliente), valida stock y oferta por cantidad.
 - `phone` ecuatoriano: 10 dígitos que empiezan en `09` (normalizar `+593 9...` → `09...`).
 - `cod` → crea en Dropi al instante; si Dropi falla, la orden queda `confirmed` con `dropi.error` y el admin reintenta.
-- `card` → `pending_payment` + config de la Cajita. `transfer` → `awaiting_transfer` + `settings.bankAccounts` en la respuesta del front.
+- `card` → `pending_payment` + config de la Cajita. `transfer` → `awaiting_transfer` + `bankAccounts` (solo activas) en la respuesta.
+- `transfer` con el interruptor apagado o sin cuentas activas → 400 "Por ahora no recibimos transferencias…".
+- `transferBank` opcional (`_id` de la cuenta o nombre del banco): queda en `transfer.bank` y el pedido, el correo y
+  `GET /orders/track` muestran solo esa cuenta. Con una sola cuenta activa se usa esa. `track` devuelve `transfer.bank`
+  y `bankAccounts` mientras el pedido está en `awaiting_transfer` (aunque luego se apaguen las transferencias).
 - Envía el correo "Recibimos tu pedido" al cliente (si dejó `email`) y "Nuevo pedido" al equipo. Ver [Correos del pedido](#correos-del-pedido).
 
 ### `GET /orders/pay/:token` (link de pago `/pagar/<token>`)
@@ -215,7 +232,27 @@ Endpoints `/whatsapp-bot/*` para BuilderBot y `/whatsapp-bot/admin/*` para el pa
 | POST | `/admin/orders/:id/dropi-manual` | `{ dropiOrderId?: number, guide?: string, carrier?: string }` → el pedido ya se creó a mano en app.dropi.ec. Solo desde `confirmed`/`sent_to_dropi`. Queda `sent_to_dropi` (o `shipped` si trae guía), guarda `dropi.*`, limpia `dropi.error` y anota "Creado en Dropi manualmente" en el historial. 409 si el id de Dropi ya está en otro pedido. Responde `Order` |
 | PUT | `/admin/orders/:id/shipping` | `{ guide?, carrier?, status?: "shipped" \| "delivered" \| "returned" }` → envío a mano (no hay sincronización automática). Transiciones: `shipped` desde `confirmed`/`sent_to_dropi` (exige guía); `delivered` desde `confirmed`/`sent_to_dropi`/`shipped`; `returned` desde `sent_to_dropi`/`shipped`/`delivered`. Agregar guía sin `status` a un pedido que no salía lo pasa a `shipped`. `delivered` en contra entrega pone `paymentStatus: "paid"`. Responde `Order` |
 | GET | `/admin/leads` | `Paginated<Lead>` carritos abandonados (no convertidos) |
-| GET/PUT | `/admin/settings` | `Settings` completo |
+| GET/PUT | `/admin/settings` | `Settings` completo. Ya **no** edita `bankAccounts` (ver Pagos y bancos) |
+
+### Pagos y bancos (`/admin/payments`)
+
+Único lugar que edita el interruptor de transferencias y las cuentas. Todas responden `PaymentsView`:
+`{ acceptTransfers, transferSurcharge, accounts: BankAccount[], banks: { code, name, logoUrl }[] }`.
+
+| Método | Ruta | Body | Notas |
+|---|---|---|---|
+| GET | `/admin/payments` | — | Incluye el catálogo de bancos de Ecuador |
+| PUT | `/admin/payments` | `{ acceptTransfers?: boolean, transferSurcharge?: number /* centavos */ }` | Encender sin cuentas activas → 400 "Para aceptar transferencias agrega al menos una cuenta activa" |
+| POST | `/admin/payments/accounts` | `{ bankCode, bank?, type, number, holder, idNumber, active?, logoUrl? }` | 201. `bank` solo si `bankCode: "otro"` (con código conocido el nombre sale del catálogo). `active` por defecto `true`. Máx. 10; duplicado (mismo banco y número) → 400 |
+| PUT | `/admin/payments/accounts/:id` | cualquier campo del POST | Parcial (lo que no viene se conserva). Pausar con `{ "active": false }` |
+| DELETE | `/admin/payments/accounts/:id` | — | |
+
+Validación: `type` Ahorros/Corriente/Transaccional; `number` 5–20 dígitos (se quitan espacios y guiones); `holder`
+≥ 3 letras; `idNumber` 10 o 13 dígitos; `logoUrl` https. Pausar o borrar la **única** cuenta activa con
+transferencias encendidas → 400 con explicación (se rechaza; primero apaga el interruptor o activa otra).
+
+Migración suave: documentos viejos sin `acceptTransfers` lo reciben al leer (`true` si ya había cuentas); las cuentas
+viejas reciben `_id`, `active: true` y `bankCode` adivinado por el nombre.
 
 ### Pedidos a Dropi a mano
 
@@ -320,7 +357,7 @@ queda en el log (`[email] …`) y nunca rompe el flujo. Salen desde `RESEND_FROM
 
 | Momento | Dónde se dispara | Cliente (solo si dejó `email`) | Equipo |
 |---|---|---|---|
-| Pedido creado (web o bot) | `createOrder` | "Recibimos tu pedido KV-…": resumen, total por método y próximos pasos (tarjeta: botón a `/pagar/<payToken>` si sigue pendiente; transferencia: cuentas de Ajustes y cómo enviar el comprobante; contra entrega: "te contactamos para coordinar"), link de rastreo | "Nuevo pedido KV-… · $X · método · canal": cliente, dirección, productos con ID de Dropi, botón al panel y WhatsApp al cliente |
+| Pedido creado (web o bot) | `createOrder` | "Recibimos tu pedido KV-…": resumen, total por método y próximos pasos (tarjeta: botón a `/pagar/<payToken>` si sigue pendiente; transferencia: la cuenta elegida o las activas, con logo, y cómo enviar el comprobante; contra entrega: "te contactamos para coordinar"), link de rastreo | "Nuevo pedido KV-… · $X · método · canal": cliente, dirección, productos con ID de Dropi, botón al panel y WhatsApp al cliente |
 | Pago aprobado (tarjeta o transferencia) | `confirmPayphone`, `confirmTransfer` | "Pago confirmado" | "Pago confirmado: pasa el pedido a Dropi" (o "ya está en Dropi") |
 | Comprobante recibido (web o bot) | `attachReceipt` | — | "Comprobante por revisar KV-…" con link al comprobante |
 | Enviado con guía | `dropi-manual` con guía, `PUT shipping` → `shipped` | "Tu pedido va en camino" con transportadora y guía | — |
