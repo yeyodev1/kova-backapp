@@ -67,20 +67,53 @@ export async function findById(id: string): Promise<SessionUser> {
   return sanitize(user);
 }
 
+// Las que cualquiera prueba primero; el front usa la misma lista para el aviso del panel.
+const OBVIOUS_PASSWORDS = new Set([
+  "123456789",
+  "1234567890",
+  "12345678",
+  "123456",
+  "0987654321",
+  "password",
+  "password123",
+  "contraseña",
+  "contrasena",
+  "kova1234",
+  "kova12345",
+  "kovastore",
+  "qwerty123",
+  "qwertyuiop",
+  "admin1234",
+  "administrador",
+]);
+
+const MIN_PASSWORD = 10;
+
 export async function changePassword(
   id: string,
   current: string,
   next: string,
 ): Promise<SessionUser> {
   requireDb();
-  if (next.length < 8) {
-    throw new CustomError("La nueva contraseña debe tener al menos 8 caracteres", 400);
+  if (!current) throw new CustomError("Escribe tu contraseña actual", 400);
+  if (next.length < MIN_PASSWORD) {
+    throw new CustomError(
+      `La nueva contraseña debe tener al menos ${MIN_PASSWORD} caracteres`,
+      400,
+    );
+  }
+  if (next === current) {
+    throw new CustomError("La nueva contraseña debe ser distinta de la actual", 400);
+  }
+  if (OBVIOUS_PASSWORDS.has(next.trim().toLowerCase())) {
+    throw new CustomError("Esa contraseña es muy fácil de adivinar, elige otra", 400);
   }
 
   const user = await User.findById(id).select("+password");
   if (!user) throw new CustomError("Usuario no encontrado", 404);
+  // 400 y no 401: un 401 hace que el panel cierre la sesión por token vencido.
   if (!(await bcrypt.compare(current, user.password))) {
-    throw new CustomError("La contraseña actual no es correcta", 401);
+    throw new CustomError("La contraseña actual no es correcta", 400);
   }
 
   user.password = next;
