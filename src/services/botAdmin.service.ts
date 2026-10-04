@@ -46,6 +46,7 @@ export async function listEvents(query: Record<string, unknown>) {
       reply: event.reply,
       mediaUrl: event.mediaUrl,
       orderNumber: event.orderNumber,
+      paymentLink: event.paymentLink || "",
       duplicated: event.duplicated,
       durationMs: event.durationMs,
       error: event.error,
@@ -53,6 +54,45 @@ export async function listEvents(query: Record<string, unknown>) {
     total,
     page,
     pages: Math.max(1, Math.ceil(total / limit)),
+  };
+}
+
+/** Resumen de una sesión para el panel (tarjeta de /sessions y encabezado del chat). */
+function summarizeSession(session: any, last: any) {
+  const state = session.state || {};
+  const cart = state.cart || [];
+  return {
+    phone: session.phone,
+    customerName: [state.firstName, state.lastName].filter(Boolean).join(" "),
+    stage: state.stage || "idle",
+    cart: {
+      items: cart.reduce((sum: number, line: any) => sum + (Number(line.quantity) || 0), 0),
+      total: cart.reduce((sum: number, line: any) => sum + (Number(line.total) || 0), 0),
+      summary: cart
+        .map(
+          (line: any) =>
+            `${line.quantity} × ${line.title}${line.variantName ? ` (${line.variantName})` : ""}`,
+        )
+        .join(", "),
+    },
+    paymentMethod: state.paymentMethod || null,
+    orderNumber: state.orderNumber || "",
+    silencedUntil:
+      session.silencedUntil && new Date(session.silencedUntil).getTime() > Date.now()
+        ? session.silencedUntil
+        : null,
+    optOut: Boolean(state.optOut),
+    humanRequested: Boolean(session.humanRequestedAt),
+    humanRequestedAt: session.humanRequestedAt || null,
+    lastMessage: last
+      ? {
+          role: last.role,
+          content: last.content,
+          hasMedia: Boolean(last.mediaUrl),
+          at: last.createdAt,
+        }
+      : null,
+    updatedAt: session.updatedAt,
   };
 }
 
@@ -92,49 +132,308 @@ export async function listSessions(query: Record<string, unknown>) {
       .lean(),
     WhatsappSession.countDocuments(filter),
   ]);
-  const now = Date.now();
   return {
-    items: sessions.map((session: any) => {
-      const state = session.state || {};
-      const cart = state.cart || [];
-      const last = session.history?.[0];
-      return {
-        phone: session.phone,
-        customerName: [state.firstName, state.lastName].filter(Boolean).join(" "),
-        stage: state.stage || "idle",
-        cart: {
-          items: cart.reduce((sum: number, line: any) => sum + (Number(line.quantity) || 0), 0),
-          total: cart.reduce((sum: number, line: any) => sum + (Number(line.total) || 0), 0),
-          summary: cart
-            .map(
-              (line: any) =>
-                `${line.quantity} × ${line.title}${line.variantName ? ` (${line.variantName})` : ""}`,
-            )
-            .join(", "),
-        },
-        paymentMethod: state.paymentMethod || null,
-        orderNumber: state.orderNumber || "",
-        silencedUntil:
-          session.silencedUntil && new Date(session.silencedUntil).getTime() > now
-            ? session.silencedUntil
-            : null,
-        optOut: Boolean(state.optOut),
-        humanRequested: Boolean(session.humanRequestedAt),
-        humanRequestedAt: session.humanRequestedAt || null,
-        lastMessage: last
-          ? {
-              role: last.role,
-              content: last.content,
-              hasMedia: Boolean(last.mediaUrl),
-              at: last.createdAt,
-            }
-          : null,
-        updatedAt: session.updatedAt,
-      };
-    }),
+    items: sessions.map((session: any) => summarizeSession(session, session.history?.[0])),
     total,
     page,
     pages: Math.max(1, Math.ceil(total / limit)),
+  };
+}
+
+// ── Conversación completa (chat del panel) ──────────────────────────────────
+
+/** Un /brain y el flujo que lo atiende llegan con segundos de diferencia. */
+const BRAIN_PAIR_MS = 2 * 60_000;
+/** Ventana para reconocer en el historial un mensaje que ya está en la bitácora. */
+const HISTORY_MATCH_MS = 5 * 60_000;
+const FILE_PLACEHOLDER = "[archivo adjunto]";
+
+export type ConversationRole = "client" | "bot" | "system";
+export type ConversationSystemKind =
+  | "order_created"
+  | "payment_link"
+  | "receipt"
+  | "payment_confirmed"
+  | "human_request"
+  | "silenced"
+  | "duplicated"
+  | "error";
+
+export interface ConversationMeta {
+  endpoint: string;
+  route: string;
+  decision: string;
+  step: string;
+  ms: number;
+  error: string;
+  orderNumber: string;
+  paymentLink: string;
+  duplicated?: boolean;
+  /** Lo que decidió /brain antes de llamar al flujo. */
+  brain?: { route: string; decision: string; step: string; ms: number };
+}
+
+export interface ConversationMessage {
+  id: string;
+  at: Date;
+  role: ConversationRole;
+  text: string;
+  mediaUrl?: string;
+  kind?: ConversationSystemKind;
+  meta?: ConversationMeta;
+  /** "history" cuando el turno no está en la bitácora y sale del historial de la sesión. */
+  source: "event" | "history";
+}
+
+const brainMeta = (event: any) => ({
+  route: event.route || "",
+  decision: event.decision || "",
+  step: event.step || "",
+  ms: event.durationMs || 0,
+});
+
+const eventMeta = (event: any, brain?: any): ConversationMeta => ({
+  endpoint: event.endpoint || "",
+  route: event.route || "",
+  decision: event.decision || "",
+  step: event.step || "",
+  ms: event.durationMs || 0,
+  error: event.error || "",
+  orderNumber: event.orderNumber || "",
+  paymentLink: event.paymentLink || "",
+  ...(event.duplicated ? { duplicated: true } : {}),
+  ...(brain ? { brain: brainMeta(brain) } : {}),
+});
+
+const sameText = (a: unknown, b: unknown) =>
+  String(a || "")
+    .trim()
+    .slice(0, 300) ===
+  String(b || "")
+    .trim()
+    .slice(0, 300);
+
+/** Convierte la bitácora (orden cronológico) en burbujas de chat y avisos de sistema. */
+function eventsToMessages(events: any[]): ConversationMessage[] {
+  const messages: ConversationMessage[] = [];
+  let pendingBrain: any = null;
+  let pendingHuman: any = null;
+  const id = (event: any, suffix: string) => `${event._id}:${suffix}`;
+  const media = (url?: string) => (url ? { mediaUrl: url } : {});
+
+  const system = (event: any, kind: ConversationSystemKind, text: string, meta?: any) =>
+    messages.push({
+      id: id(event, kind),
+      at: event.createdAt,
+      role: "system",
+      kind,
+      text,
+      ...(meta ? { meta } : {}),
+      source: "event",
+    });
+
+  // Un /brain sin flujo después: el cliente escribió y el bot calló (silenciado) o aún procesa.
+  const flushBrain = () => {
+    if (!pendingBrain) return;
+    const brain = pendingBrain;
+    pendingBrain = null;
+    messages.push({
+      id: id(brain, "client"),
+      at: brain.createdAt,
+      role: "client",
+      text: brain.message || "",
+      ...media(brain.mediaUrl),
+      meta: eventMeta(brain),
+      source: "event",
+    });
+    if (brain.route === "silenced")
+      system(brain, "silenced", "Bot en silencio: no respondió", eventMeta(brain));
+  };
+
+  // Se registra antes que el turno; el aviso va después de la respuesta del bot.
+  const flushHuman = (after?: any) => {
+    if (!pendingHuman) return;
+    system(
+      after ? { ...pendingHuman, createdAt: after.createdAt } : pendingHuman,
+      "human_request",
+      "Pidió un asesor",
+      eventMeta(pendingHuman),
+    );
+    pendingHuman = null;
+  };
+
+  // El /brain pendiente corresponde a este turno si llegó justo antes.
+  const takeBrain = (event: any) => {
+    if (!pendingBrain) return null;
+    const gap = new Date(event.createdAt).getTime() - new Date(pendingBrain.createdAt).getTime();
+    if (gap > BRAIN_PAIR_MS) {
+      flushBrain();
+      return null;
+    }
+    const brain = pendingBrain;
+    pendingBrain = null;
+    return brain;
+  };
+
+  for (const event of events) {
+    if (event.kind === "decision") {
+      flushBrain();
+      pendingBrain = event;
+      continue;
+    }
+    if (event.kind === "human_request") {
+      flushHuman();
+      pendingHuman = event;
+      continue;
+    }
+    if (event.kind === "turn" && event.duplicated) {
+      system(
+        event,
+        "duplicated",
+        "Reintento de BuilderBot: se repitió la respuesta",
+        eventMeta(event),
+      );
+      continue;
+    }
+
+    const brain = takeBrain(event);
+    const clientText = event.message || brain?.message || "";
+    const clientMedia = event.mediaUrl || brain?.mediaUrl || "";
+    if (clientText || clientMedia)
+      messages.push({
+        id: id(event, "client"),
+        at: brain?.createdAt || event.createdAt,
+        role: "client",
+        text: clientText,
+        ...media(clientMedia),
+        source: "event",
+      });
+
+    if (event.kind === "error") {
+      system(
+        event,
+        "error",
+        "Error del bot: el cliente recibió el mensaje de reintento",
+        eventMeta(event, brain),
+      );
+      continue;
+    }
+
+    messages.push({
+      id: id(event, "bot"),
+      at: event.createdAt,
+      role: "bot",
+      text: event.reply || "",
+      meta: eventMeta(event, brain),
+      source: "event",
+    });
+    const decision = String(event.decision || "");
+    if (decision.startsWith("R7:orden_creada"))
+      system(
+        event,
+        "order_created",
+        `Pedido creado ${event.orderNumber || ""}`.trim(),
+        eventMeta(event),
+      );
+    if (event.paymentLink) system(event, "payment_link", "Link de pago enviado", eventMeta(event));
+    if (decision === "R1:comprobante")
+      system(event, "receipt", "Comprobante recibido", eventMeta(event));
+    if (decision.startsWith("R3:pago_confirmado"))
+      system(event, "payment_confirmed", "Pago confirmado", eventMeta(event));
+    flushHuman(event);
+  }
+  flushHuman();
+  flushBrain();
+  return messages;
+}
+
+/** Turnos del historial de la sesión que no quedaron en la bitácora. */
+function historyFallback(history: any[], events: any[], from: Date | null, to: Date | null) {
+  return history
+    .filter((entry) => {
+      const at = new Date(entry.createdAt).getTime();
+      if (from && at < from.getTime()) return false;
+      if (to && at >= to.getTime()) return false;
+      return !events.some((event) => {
+        if (Math.abs(new Date(event.createdAt).getTime() - at) > HISTORY_MATCH_MS) return false;
+        return entry.role === "user"
+          ? sameText(event.message, entry.content)
+          : sameText(event.reply, entry.content);
+      });
+    })
+    .map((entry): ConversationMessage => ({
+      id: `history:${new Date(entry.createdAt).getTime()}:${entry.role}`,
+      at: entry.createdAt,
+      role: entry.role === "user" ? "client" : "bot",
+      text: entry.content || "",
+      ...(entry.mediaUrl ? { mediaUrl: entry.mediaUrl } : {}),
+      source: "history",
+    }));
+}
+
+/**
+ * GET /whatsapp-bot/admin/conversations/:phone?before&limit — chat completo con
+ * lo que decidió el bot en cada turno. `limit` cuenta filas de la bitácora;
+ * `nextBefore` es el `before` de la página anterior.
+ */
+export async function getConversation(rawPhone: unknown, query: Record<string, unknown>) {
+  const phone = sessionKey(rawPhone);
+  if (!phone) throw new CustomError("Falta el teléfono", 400);
+  const limit = Math.min(200, Math.max(1, Math.floor(Number(query.limit) || 50)));
+  let before: Date | null = null;
+  if (query.before) {
+    before = new Date(String(query.before));
+    if (Number.isNaN(before.getTime()))
+      throw new CustomError("La fecha 'before' no es válida", 400);
+  }
+
+  const [session, newest]: [any, any[]] = await Promise.all([
+    WhatsappSession.findOne(
+      { phone },
+      { phone: 1, state: 1, history: 1, silencedUntil: 1, humanRequestedAt: 1, updatedAt: 1 },
+    ).lean(),
+    BotEvent.find({ phone, ...(before ? { createdAt: { $lt: before } } : {}) })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean(),
+  ]);
+  if (!session && !newest.length && !before)
+    throw new CustomError("No hay conversación con ese número", 404);
+
+  // Que el /brain de un turno no quede en otra página que su respuesta.
+  const oldest = newest[newest.length - 1];
+  if (oldest && oldest.kind !== "decision") {
+    const brain = await BotEvent.findOne({
+      phone,
+      kind: "decision",
+      createdAt: {
+        $lt: oldest.createdAt,
+        $gte: new Date(new Date(oldest.createdAt).getTime() - BRAIN_PAIR_MS),
+      },
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+    if (brain) newest.push(brain);
+  }
+  const events = newest.reverse();
+  const from: Date | null = events.length ? events[0].createdAt : null;
+  const hasMore = from
+    ? Boolean(await BotEvent.exists({ phone, createdAt: { $lt: from } }))
+    : false;
+
+  const history = session?.history || [];
+  const messages = [
+    ...eventsToMessages(events),
+    // Sin más bitácora atrás, esta página se queda con todo el historial anterior.
+    ...historyFallback(history, events, hasMore ? from : null, before),
+  ].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+
+  return {
+    phone,
+    session: session ? summarizeSession(session, history[history.length - 1]) : null,
+    messages,
+    hasMore,
+    nextBefore: hasMore && from ? new Date(from).toISOString() : null,
   };
 }
 
