@@ -1,6 +1,6 @@
 import { env } from "../config/env";
 import { User } from "../models/user.model";
-import { layout, sendEmail } from "./email.service";
+import { emailButton, escapeHtml, infoBox, layout, paragraph, sendEmail } from "./email.service";
 
 interface HumanRequest {
   phone: string;
@@ -9,17 +9,29 @@ interface HumanRequest {
   reply: string;
 }
 
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+/** Qué aviso por correo se consulta: cada administrador los prende o apaga en Ajustes. */
+export type TeamAlertKind = "orders" | "humanRequests";
+
+const FLAG: Record<TeamAlertKind, string> = {
+  orders: "notifyOrders",
+  humanRequests: "notifyHumanRequests",
+};
+
+/** Correos de los administradores activos con ese aviso encendido (sin campo = encendido). */
+export async function teamRecipients(kind: TeamAlertKind): Promise<string[]> {
+  const admins = await User.find({
+    accountType: "admin",
+    isActive: true,
+    [FLAG[kind]]: { $ne: false },
+  })
+    .select("email")
+    .lean();
+  return [...new Set(admins.map((admin: any) => String(admin.email || "").trim()).filter(Boolean))];
 }
 
 /** 09XXXXXXXX → 5939XXXXXXXX para abrir el chat con wa.me. */
-function waNumber(phone: string): string {
-  const digits = phone.replace(/\D/g, "");
+export function waNumber(phone: string): string {
+  const digits = String(phone || "").replace(/\D/g, "");
   return digits.startsWith("0") ? `593${digits.slice(1)}` : digits;
 }
 
@@ -30,32 +42,28 @@ function waNumber(phone: string): string {
  */
 export async function notifyHumanRequest(request: HumanRequest): Promise<void> {
   try {
-    const admins = await User.find({
-      accountType: "admin",
-      isActive: true,
-      notifyHumanRequests: { $ne: false },
-    })
-      .select("email")
-      .lean();
-    if (!admins.length) return;
+    const recipients = await teamRecipients("humanRequests");
+    if (!recipients.length) return;
 
     const who = request.name.trim() || "Un cliente";
     const chatUrl = `https://wa.me/${waNumber(request.phone)}`;
     const panelUrl = `${env.FRONTEND_URL.replace(/\/+$/, "")}/admin/bot`;
     const html = layout(
       "Un cliente pide un asesor",
-      `<p><strong>${escapeHtml(who)}</strong> (${escapeHtml(request.phone)}) quiere hablar con una persona.
-       El bot quedó en pausa 60 minutos para ese chat.</p>
-       <p style="margin:16px 0 4px;color:#71717a;font-size:13px">Lo que escribió:</p>
-       <blockquote style="margin:0;padding:12px 16px;background:#f4f4f5;border-radius:10px">${escapeHtml(request.message || "(sin texto)")}</blockquote>
-       <p style="margin:24px 0">
-         <a href="${chatUrl}" style="background:#1f9d55;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:bold">Responder por WhatsApp</a>
-       </p>
-       <p style="font-size:13px;color:#71717a">Ver la conversación en el panel: <a href="${panelUrl}">${panelUrl}</a></p>
-       <p style="font-size:12px;color:#a1a1aa">Recibes este aviso porque lo tienes activado en Panel → Ajustes → Avisos de asesor.</p>`,
+      paragraph(
+        `<strong>${escapeHtml(who)}</strong> (${escapeHtml(request.phone)}) quiere hablar con una persona. El bot quedó en pausa 60 minutos para ese chat.`,
+      ) +
+        paragraph(`<span style="font-size:13px;color:#6b746e">Lo que escribió:</span>`) +
+        infoBox(escapeHtml(request.message || "(sin texto)")) +
+        `<div style="margin:8px 0 16px">${emailButton("Responder por WhatsApp", chatUrl, "#1f9d55")}${emailButton("Ver en el panel", panelUrl)}</div>`,
+      {
+        preheader: `${who} quiere hablar con una persona`,
+        footer:
+          "Recibes este aviso porque lo tienes activado en Panel → Ajustes → Avisos por correo (Asesor).",
+      },
     );
     const subject = `Asesor solicitado: ${who} · ${request.phone}`;
-    await Promise.all(admins.map((admin: any) => sendEmail(admin.email, subject, html)));
+    await Promise.all(recipients.map((to) => sendEmail(to, subject, html)));
   } catch (error: any) {
     console.error("[alertas] no se pudo avisar del asesor:", error?.message);
   }
