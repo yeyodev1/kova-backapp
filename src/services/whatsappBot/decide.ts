@@ -1,5 +1,7 @@
 import {
   asksIfBot,
+  extractChoice,
+  isComplaint,
   isYes,
   orderNumberIn,
   wantsCatalog,
@@ -45,9 +47,13 @@ export function decideRoute(
   if (!message) return { route: "conversation", reason: "mensaje vacio" };
   // "hablo con una persona?" es una pregunta (se responde que es un bot), no un pedido de asesor.
   if (asksIfBot(message)) return { route: "conversation", reason: "pregunta si es un bot" };
+  if (isComplaint(message)) return { route: "human", reason: "reclamo" };
   if (wantsHuman(message)) return { route: "human", reason: "pide una persona" };
+  // Consultas de pedido: /conversation las responde en vivo desde la base, en cualquier paso.
   if (wantsTracking(message) || orderNumberIn(message))
     return { route: "conversation", reason: "consulta de pedido" };
+  if (state.orderChoices?.length && extractChoice(message, state.orderChoices.length))
+    return { route: "conversation", reason: "elige un pedido" };
   if (state.stage === "confirm" && isYes(message)) {
     if (state.paymentMethod === "transfer")
       return { route: "checkoutTransfer", reason: "confirma pedido por transferencia" };
