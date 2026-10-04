@@ -356,6 +356,7 @@ export async function turn(body: any, endpoint: string) {
         step: result.step,
         message,
         reply: result.reply,
+        mediaUrl,
       });
       // Sin await: el correo al equipo no debe demorar la respuesta al cliente.
       void notifyHumanRequest({
@@ -379,6 +380,7 @@ export async function turn(body: any, endpoint: string) {
       reply: result.reply,
       mediaUrl,
       orderNumber: result.orderNumber || "",
+      paymentLink: result.paymentLink || "",
       duplicated: Boolean(result.duplicated),
       durationMs: Date.now() - startedAt,
     });
