@@ -1,6 +1,7 @@
 import { isValidObjectId } from "mongoose";
 import { CustomError } from "../errors/customError.error";
 import { Order, OrderStatus } from "../models/order.model";
+import { notifyOrder } from "./orderNotifications.service";
 
 /**
  * Flujo manual con Dropi: mientras la API esté bloqueada, el admin crea el pedido en
@@ -112,6 +113,7 @@ export async function markCreatedInDropi(id: string, body: any) {
     historyEntry(nextStatus, `Creado en Dropi manualmente${details ? ` ${details}` : ""}`),
   );
   await order.save();
+  if (nextStatus === "shipped") notifyOrder("shipped", order);
   return order.toObject();
 }
 
@@ -131,6 +133,7 @@ export async function updateShipping(id: string, body: any) {
   const guide = hasGuide ? text(body.guide, 60) : order.dropi.guide;
   const carrier = hasCarrier ? text(body.carrier, 60) : order.dropi.carrier;
 
+  const previous = order.status;
   let status = rawStatus as ShippingStatus | "";
   // Agregar la guía a un pedido que aún no salía equivale a marcarlo como enviado.
   if (
@@ -175,5 +178,9 @@ export async function updateShipping(id: string, body: any) {
     order.history.push(historyEntry(order.status, notes.join(" · ")));
   }
   await order.save();
+  // Solo al cambiar de estado: corregir la guía después no reenvía el correo.
+  if (order.status !== previous && (order.status === "shipped" || order.status === "delivered")) {
+    notifyOrder(order.status, order);
+  }
   return order.toObject();
 }
