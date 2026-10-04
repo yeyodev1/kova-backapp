@@ -9,6 +9,7 @@ import { slugify } from "../utils/slugify";
 import { sleep } from "../utils/sleep";
 import { compareAtFor, defaultOffers, salePrice } from "../utils/pricing";
 import * as dropiService from "./dropi.service";
+import { reportIncident, resolveIncidents } from "./incidents.service";
 
 /** Pausa entre llamadas en serie: Dropi corta por rate limit con ráfagas. */
 const PAUSE_MS = 300;
@@ -441,6 +442,7 @@ export async function syncOrders() {
   }).sort({ "dropi.lastSyncAt": 1 });
   let updated = 0;
   let failed = 0;
+  const errors: string[] = [];
 
   for (const order of orders) {
     if (Date.now() - started > TIME_BUDGET_MS) break;
@@ -456,12 +458,27 @@ export async function syncOrders() {
         order.history.push({ status: nextStatus, note: `Dropi: ${remote.status}`, at: new Date() });
       }
       await order.save();
+      if (order.dropi.guide) {
+        void resolveIncidents(order._id, ["order_stuck"], "Resuelta sola: Dropi asignó la guía.");
+      }
       updated++;
     } catch (error: any) {
       failed++;
+      errors.push(`${order.number}: ${error?.message || "error desconocido"}`);
       console.error(`[dropi-sync] pedido ${order.number}:`, error?.message);
     }
     await sleep(PAUSE_MS);
+  }
+
+  // Una sola tarjeta para la sincronización: si Dropi está caído fallan todos a la vez.
+  if (failed) {
+    await reportIncident({
+      type: "dropi_error",
+      severity: "medium",
+      title: `No se pudo sincronizar ${failed} pedido${failed === 1 ? "" : "s"} con Dropi`,
+      detail: `Estados y guías sin actualizar.\n${errors.slice(0, 10).join("\n")}`,
+      key: "sync-orders",
+    });
   }
 
   return { total: orders.length, updated, failed };
