@@ -1,5 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import * as adminService from "../services/admin.service";
+import * as dropiManualService from "../services/dropiManual.service";
+import * as orderExportService from "../services/orderExport.service";
 import * as orderService from "../services/order.service";
 
 /** GET /api/admin/dashboard */
@@ -109,6 +111,40 @@ export async function sendToDropi(req: Request, res: Response, next: NextFunctio
 export async function cancelOrder(req: Request, res: Response, next: NextFunction) {
   try {
     res.status(200).json(await orderService.cancelOrder(String(req.params.id)));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** POST /api/admin/orders/:id/dropi-manual — { dropiOrderId?, guide?, carrier? } */
+export async function markCreatedInDropi(req: Request, res: Response, next: NextFunction) {
+  try {
+    res
+      .status(200)
+      .json(await dropiManualService.markCreatedInDropi(String(req.params.id), req.body));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** PUT /api/admin/orders/:id/shipping — { guide?, carrier?, status? } */
+export async function updateShipping(req: Request, res: Response, next: NextFunction) {
+  try {
+    res.status(200).json(await dropiManualService.updateShipping(String(req.params.id), req.body));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** GET /api/admin/orders/export?status&from&to&ids&paymentMethod&q — CSV para Dropi */
+export async function exportOrders(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { filename, content, orders } = await orderExportService.exportOrdersCsv(req.query);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("X-Orders-Count", String(orders));
+    res.setHeader("Access-Control-Expose-Headers", "Content-Disposition, X-Orders-Count");
+    res.status(200).send(content);
   } catch (error) {
     next(error);
   }
