@@ -34,6 +34,8 @@ export interface ClipProduct {
   images: string[];
   costPrice?: number;
   suggestedPrice?: number;
+  /** Precio de venta manual: Dropi dibuja los precios en canvas y a veces no hay costo. */
+  price?: number;
   description?: string;
   stock?: number;
   category?: string;
@@ -123,6 +125,7 @@ export function cleanClipProduct(raw: any): ClipProduct {
     images: httpsImages(raw.images),
     costPrice: optionalInt(raw.costPrice, "El costo"),
     suggestedPrice: optionalInt(raw.suggestedPrice, "El precio sugerido"),
+    price: optionalInt(raw.price, "El precio de venta"),
     description: description || undefined,
     stock: optionalInt(raw.stock, "El stock"),
     category: text(raw.category, 80) || undefined,
@@ -202,6 +205,7 @@ async function upsertClip(clip: ClipProduct, markup: number): Promise<ClipResult
       suggestedPrice: clip.suggestedPrice ?? 0,
       stock: clip.stock ?? 0,
       variants: toVariants(clip, markup),
+      price: clip.price,
     },
     markup,
   );
@@ -210,6 +214,7 @@ async function upsertClip(clip: ClipProduct, markup: number): Promise<ClipResult
     productId: String(product._id),
     title: product.title,
     status: "created",
+    ...(product.price ? {} : { message: "Quedó sin precio: ponle precio antes de publicar" }),
   };
 }
 
