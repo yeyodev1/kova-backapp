@@ -147,6 +147,8 @@ Reglas de `POST /orders`:
 | GET | `/admin/dropi/status` | `?refresh=1` → `{ configured, connected, message, blockedIp, integrationUrl, urlMismatch, checkedAt }`. Una sola llamada liviana a Dropi (`GET /department`), cacheada 60 s (`refresh=1` la salta, máximo cada 10 s). `blockedIp` = IP que Dropi reporta en su `401 Access denied`. `integrationUrl` sale del payload del token (decodificado sin verificar firma); el token nunca se devuelve. `urlMismatch` = la integración no está registrada con `kovashopper.com` |
 | GET | `/admin/dropi/products` | `?q&page&limit` → busca en el catálogo de Dropi: `{ items: [{ dropiId, name, type, costPrice, suggestedPrice, stock, image, imported: boolean }], total }` |
 | POST | `/admin/dropi/import` | `{ dropiId?, url?, markupPercent? }` → crea/actualiza `Product` (borrador) con imágenes, variantes, stock, precio = sugerido o costo × (1+markup). Acepta el id (`12345`) o un link de producto de Dropi (`.../product-details/12345`, `?id=12345`): se toma el último número de 3+ dígitos del path/query. 400 si no hay id |
+| POST | `/admin/dropi/clip` | Botón **Enviar a Kova** (ver `docs/DROPI.md`). `{ products: ClipProduct[], markupPercent? }`, máx 60 → `{ results: [{ dropiId, productId, title, status: "created" \| "updated" \| "error", message? }] }`. No llama a Dropi: guarda lo que el dueño leyó en su propia sesión. Un producto con error no frena a los demás (400 solo si `products` no es lista, está vacía o pasa de 60, o el margen no está entre 0 y 1000) |
+| GET | `/admin/dropi/linked` | `?ids=1,2,3` (máx 60) → `{ items: [{ dropiId, productId, title, isPublished }] }`: cuáles ya están en la tienda, para marcar "Ya importado" antes de importar |
 | POST | `/admin/dropi/sync-products` | refresca stock y costo de todos los importados |
 | POST | `/admin/dropi/sync-locations` | descarga provincias y ciudades de Dropi a Mongo |
 | POST | `/admin/dropi/sync-orders` | refresca estado/guía de órdenes `sent_to_dropi`/`shipped` |
@@ -180,6 +182,29 @@ Cantidad, Precio unitario, Total del pedido, Método de pago, Cobrar al entregar
 Celular y cédula salen como `="0991234567"` para que Excel no borre el cero inicial.
 Query: `status` (un `OrderStatus` o `all`), `from`/`to` (`AAAA-MM-DD`, hora Ecuador), `ids` (ids separados por
 coma: ignora los demás filtros), `paymentMethod`, `q`. Máximo 1000 pedidos.
+
+### `POST /admin/dropi/clip`
+
+```ts
+interface ClipProduct {
+  dropiId: number;              // entero > 0, obligatorio
+  title: string;                // 2..200
+  images: string[];             // solo https, máx 12, sin duplicados (las demás se descartan)
+  costPrice?: number;           // centavos, entero ≥ 0 (precio proveedor)
+  suggestedPrice?: number;      // centavos, entero ≥ 0
+  description?: string;         // HTML, se pasa por sanitize-html
+  stock?: number;               // entero ≥ 0
+  category?: string;
+  variants?: { name: string; dropiVariationId?: number | null; costPrice?: number; stock?: number }[];
+  sourceUrl?: string;           // link de la página de Dropi (solo https)
+}
+```
+
+- **Nuevo** `dropiId` → borrador (`isPublished: false`) con las mismas reglas que `/admin/dropi/import`
+  (`createDraftProduct`): precio = sugerido si es mayor al costo, si no costo × (1 + margen) redondeado a .90;
+  tachado +40%; ofertas 1/2/3 u; slug único. Con variantes: precio de cada una con su costo (o el del producto).
+- **Existente** → solo costo, sugerido, stock (y el de variantes con el mismo `dropiVariationId`), imágenes si no
+  tenía y `lastSyncedAt`. Nunca toca precio, textos, ofertas ni publicado.
 
 ### Productos manuales y enlace con Dropi
 
