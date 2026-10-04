@@ -18,7 +18,7 @@ import { normalizeEcPhone } from "../utils/phone";
 import { buildQuote, parsePaymentMethod } from "./checkout.service";
 import { uploadFile } from "./cloudinary.service";
 import * as dropiService from "./dropi.service";
-import { sendOrderReceivedEmail, sendPaymentConfirmedEmail } from "./email.service";
+import { notifyOrder } from "./orderNotifications.service";
 import * as payphoneService from "./payphone.service";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -253,9 +253,8 @@ export async function createOrder(input: any, options: CreateOrderOptions = {}) 
     order = await Order.findById(order._id);
   }
 
-  if (paymentMethod !== "card") {
-    sendOrderReceivedEmail(order).catch(() => {});
-  }
+  // Web y bot pasan por aquí: un solo correo de "pedido recibido" por pedido.
+  notifyOrder("created", order);
 
   const response: Record<string, unknown> = { order: toPublicOrder(order) };
 
@@ -391,9 +390,10 @@ export async function confirmPayphone(id: unknown, clientTransactionId: unknown)
     if (updated) {
       await applyStock(updated._id);
       await trySendToDropi(updated._id);
-      sendPaymentConfirmedEmail(updated).catch(() => {});
     }
     const fresh = await Order.findById(order._id);
+    // Solo quien ganó la transición avisa: recargar la respuesta no repite el correo.
+    if (updated) notifyOrder("paid", fresh);
     return { order: toPublicOrder(fresh), approved: true };
   }
 
@@ -505,6 +505,7 @@ export async function attachReceipt(order: any, buffer: Buffer, mimeType: string
   order.status = "transfer_review";
   order.history.push(historyEntry("transfer_review", text(note, 500)));
   await order.save();
+  notifyOrder("receipt", order);
   return order;
 }
 
@@ -529,9 +530,9 @@ export async function confirmTransfer(id: string) {
   if (updated) {
     await applyStock(updated._id);
     await trySendToDropi(updated._id);
-    sendPaymentConfirmedEmail(updated).catch(() => {});
   }
   const fresh = await Order.findById(order._id);
+  if (updated) notifyOrder("paid", fresh);
   return fresh.toObject();
 }
 
@@ -681,6 +682,7 @@ export async function cancelOrder(id: string) {
   await restoreStock(order._id);
 
   const fresh = await Order.findById(order._id);
+  notifyOrder("cancelled", fresh);
   return fresh.toObject();
 }
 
