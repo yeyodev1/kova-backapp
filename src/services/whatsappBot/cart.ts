@@ -84,6 +84,56 @@ async function quantityOffers(product: BotProduct, variantId: string | null, dep
   return priced.length >= 2 ? priced : [];
 }
 
+/** Pasa el producto pendiente al carrito. Devuelve el error de stock/precio o null. */
+async function addToCart(state: BotState, product: BotProduct, deps: BotDeps): Promise<string | null> {
+  const pending = state.pending!;
+  const quantity = Math.min(pending.quantity || 1, Math.max(stockOf(product, pending.variantId), 1), 10);
+  const previous = JSON.parse(JSON.stringify(state.cart));
+  const existing = state.cart.find(
+    (line) => line.productId === product.id && line.variantId === pending.variantId,
+  );
+  if (existing) existing.quantity = quantity;
+  else {
+    state.cart.push({
+      productId: product.id,
+      variantId: pending.variantId,
+      title: product.name,
+      variantName: "",
+      quantity,
+      unitPrice: 0,
+      total: 0,
+    });
+  }
+  state.pending = null;
+  state.quantityOptions = [];
+  const error = await refreshCart(state, deps);
+  if (error) {
+    state.cart = previous;
+    state.stage = state.cart.length ? state.stage : "idle";
+    return error;
+  }
+  deps.saveLead(state);
+  return null;
+}
+
+/**
+ * El cliente no contestó la cantidad y siguió con otra cosa (sus datos, la forma de pago):
+ * se asume 1 unidad para no trabarlo en "No te entendí", y el resto del mensaje se procesa.
+ * Devuelve true si el producto entró al carrito.
+ */
+export async function assumeOneUnit(state: BotState, deps: BotDeps): Promise<boolean> {
+  const pending = state.pending;
+  if (state.stage !== "quantity" || !pending) return false;
+  const catalog = await deps.loadCatalog();
+  const product = catalog.find((item) => item.id === pending.productId);
+  if (!product) return false;
+  pending.quantity = 1;
+  const error = await addToCart(state, product, deps);
+  if (error) return false;
+  state.stage = "idle";
+  return true;
+}
+
 export async function continuePending(
   state: BotState,
   deps: BotDeps,
@@ -149,36 +199,14 @@ export async function continuePending(
     pending.quantity = 1;
   }
 
-  const quantity = Math.min(pending.quantity, Math.max(stockOf(product, pending.variantId), 1), 10);
-  const previous = JSON.parse(JSON.stringify(state.cart));
-  const existing = state.cart.find(
-    (line) => line.productId === product.id && line.variantId === pending.variantId,
-  );
-  if (existing) existing.quantity = quantity;
-  else {
-    state.cart.push({
-      productId: product.id,
-      variantId: pending.variantId,
-      title: product.name,
-      variantName: "",
-      quantity,
-      unitPrice: 0,
-      total: 0,
-    });
-  }
-  state.pending = null;
-  state.quantityOptions = [];
-  const error = await refreshCart(state, deps);
+  const error = await addToCart(state, product, deps);
   if (error) {
-    state.cart = previous;
-    state.stage = state.cart.length ? state.stage : "idle";
     return reply(
       state,
       `Uy, ${error.charAt(0).toLowerCase()}${error.slice(1)} 😕 Elige otra opción o dime qué otra cosa buscas.`,
       `${decision}:sin_stock`,
     );
   }
-  deps.saveLead(state);
   const line = state.cart.find(
     (item) => item.productId === product.id && item.variantId === pending.variantId,
   )!;
