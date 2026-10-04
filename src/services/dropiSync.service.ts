@@ -290,6 +290,8 @@ export interface DraftInput {
   stock: number;
   variants: ReturnType<typeof buildVariant>[];
   dropiSupplierId?: number | null;
+  /** Precio de venta que puso el dueño a mano (centavos). Gana sobre el calculado. */
+  price?: number;
 }
 
 /**
@@ -299,9 +301,16 @@ export interface DraftInput {
  */
 export async function createDraftProduct(input: DraftInput, markup: number) {
   const { variants } = input;
-  const price = variants.length
-    ? Math.min(...variants.map((v) => v.price))
-    : salePrice(input.costPrice, input.suggestedPrice, markup);
+  // Sin costo, sugerido ni precio manual no hay base: queda en 0 en vez de inventar $0.90.
+  const hasBase = input.costPrice > 0 || input.suggestedPrice > 0;
+  const price =
+    input.price && input.price > 0
+      ? input.price
+      : variants.length
+        ? Math.min(...variants.map((v) => v.price))
+        : hasBase
+          ? salePrice(input.costPrice, input.suggestedPrice, markup)
+          : 0;
   const stock = variants.length ? variants.reduce((acc, v) => acc + v.stock, 0) : input.stock;
 
   return Product.create({
@@ -312,10 +321,10 @@ export async function createDraftProduct(input: DraftInput, markup: number) {
     images: input.images,
     category: input.category,
     price,
-    compareAtPrice: compareAtFor(price),
+    compareAtPrice: price ? compareAtFor(price) : 0,
     type: variants.length ? "VARIABLE" : "SIMPLE",
     variants,
-    offers: defaultOffers(price),
+    offers: price ? defaultOffers(price) : [],
     stock,
     isPublished: false,
     dropiId: input.dropiId,
