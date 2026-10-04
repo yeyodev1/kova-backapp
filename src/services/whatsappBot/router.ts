@@ -118,6 +118,16 @@ async function resumePurchase(state: BotState, deps: BotDeps, result: TurnResult
 
 // ─── Turno ───────────────────────────────────────────────────────────────────
 
+/** Con pocos productos se listan todos directamente. */
+const SHORT_CATALOG = 10;
+
+/** "quiero comprar", "quiero hacer un pedido", "qué venden", "qué me recomiendas": sin producto concreto. */
+function wantsToBuyAnything(message: string): boolean {
+  const value = normalize(message).replace(/[?!.,]/g, "").trim();
+  return /^(hola |buenas |buenos dias |buenas tardes |buenas noches )?(quiero|quisiera|deseo|me gustaria|voy a)? ?(comprar|hacer un pedido|pedir algo|ordenar|comprar algo|ver productos|ver opciones)( algo)?$/.test(value) ||
+    /^(que|q) (tienes|tienen|venden|vendes|ofrecen|hay|me recomiendas|recomiendas)( a la venta| disponible| hoy)?$/.test(value);
+}
+
 /** Más de 3 palabras, o una forma de pago o ciudad: el cliente ya pasó a dar sus datos. */
 function looksLikeDetails(message: string): boolean {
   const value = normalize(message);
@@ -447,6 +457,16 @@ export async function handleTurn(
       "R8:fuera_de_tema",
     );
   }
+  // Catálogo corto o "quiero comprar" sin decir qué: se muestran los productos para elegir con un
+  // número, en vez de un resumen por categorías que obliga al cliente a escribir otra vez.
+  if (
+    pendingStage === "idle" &&
+    catalog.length &&
+    catalog.length <= SHORT_CATALOG &&
+    (extraction.intent === "catalogo" || wantsToBuyAnything(message))
+  ) {
+    return showOptions(state, catalog, "R8:catalogo_lista", "Esto es lo que tenemos en Kova 🛍️👇");
+  }
   if (extraction.intent === "catalogo") {
     return resume(catalogOverview(catalog, deps.storeUrl), "R8:catalogo", {
       intent: "menu",
@@ -486,9 +506,18 @@ export async function handleTurn(
       );
     }
     if (!isGreeting(message) && extraction.intent === "comprar" && state.stage === "idle") {
+      // Nunca un "no encontré" a secas: se ofrece lo que sí hay para no perder la venta.
+      if (catalog.length) {
+        return showOptions(
+          state,
+          catalog.slice(0, 5),
+          "R8:sin_resultados",
+          "Eso exacto no lo tengo ahora 🤔 pero mira lo que sí tenemos 👇",
+        );
+      }
       return reply(
         state,
-        `No encontré eso en la tienda 🤔 Prueba con otras palabras o pídeme el *catálogo*. Si buscas algo especial, escribe *asesor*.`,
+        `Ahora mismo estoy renovando el catálogo 🙈 Escribe *asesor* y te ayuda una persona del equipo.`,
         "R8:sin_resultados",
       );
     }
@@ -500,6 +529,15 @@ export async function handleTurn(
     !state.cart.length &&
     !["variant", "quantity", "choosing"].includes(state.stage)
   ) {
+    // Con catálogo corto el saludo ya muestra los productos: el cliente elige con un número.
+    if (catalog.length && catalog.length <= SHORT_CATALOG) {
+      return showOptions(
+        state,
+        catalog,
+        "R9:saludo",
+        `Hola! Soy ${selfIntro()} 💙 Esto es lo que tenemos hoy en Kova 👇`,
+      );
+    }
     return reply(state, GREETING(), "R9:saludo");
   }
   if (state.stage === "choosing") {
