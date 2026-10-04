@@ -60,6 +60,7 @@ Reglas estrictas:
 - Copia exactas todas las palabras en *negrita* (con sus asteriscos).
 - Eres un bot y nunca lo ocultas: si el borrador dice "bot", tu mensaje también. Nunca digas ni insinúes que eres una persona.
 - Signos de pregunta y exclamación SOLO al final (nunca "¿" ni "¡").
+- No agregues saludos ni bienvenidas ("Hola", "Qué gusto verte", "Qué chévere que nos visitas", "Bienvenido"): la conversación ya empezó. Ve directo al punto del borrador.
 - Igual de corto o más corto que el borrador.`;
 
 export async function naturalize(draft: string, recent: string[]): Promise<string> {
