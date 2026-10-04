@@ -38,3 +38,12 @@ export async function track(req: Request, res: Response, next: NextFunction) {
     next(error);
   }
 }
+
+/** GET /api/orders/pay/:token — link privado de pago */
+export async function payByToken(req: Request, res: Response, next: NextFunction) {
+  try {
+    res.status(200).json(await orderService.getPayOrder(req.params.token));
+  } catch (error) {
+    next(error);
+  }
+}
