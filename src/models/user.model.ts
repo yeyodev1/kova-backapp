@@ -10,6 +10,8 @@ export interface IUser {
   name: string;
   phone: string;
   accountType: AccountType;
+  /** Recibe correo cuando un cliente del bot pide un asesor. Por defecto sí. */
+  notifyHumanRequests: boolean;
   isActive: boolean;
   lastLoginAt: Date | null;
   resetPasswordToken: string | null;
@@ -26,6 +28,7 @@ const userSchema = new Schema<IUser>(
     name: { type: String, default: "" },
     phone: { type: String, default: "" },
     accountType: { type: String, enum: ACCOUNT_TYPES, default: "customer" },
+    notifyHumanRequests: { type: Boolean, default: true },
     isActive: { type: Boolean, default: true },
     lastLoginAt: { type: Date, default: null },
     resetPasswordToken: { type: String, default: null },
