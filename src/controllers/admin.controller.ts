@@ -196,3 +196,21 @@ export async function updateSettings(req: Request, res: Response, next: NextFunc
     next(error);
   }
 }
+
+/** GET /api/admin/team */
+export async function listTeam(_req: Request, res: Response, next: NextFunction) {
+  try {
+    res.status(200).json(await adminService.listTeam());
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** PUT /api/admin/team/:id  { notifyHumanRequests } */
+export async function updateTeamMember(req: Request, res: Response, next: NextFunction) {
+  try {
+    res.status(200).json(await adminService.updateTeamMember(String(req.params.id), req.body));
+  } catch (error) {
+    next(error);
+  }
+}
