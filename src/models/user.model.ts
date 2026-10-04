@@ -12,6 +12,8 @@ export interface IUser {
   accountType: AccountType;
   /** Recibe correo cuando un cliente del bot pide un asesor. Por defecto sí. */
   notifyHumanRequests: boolean;
+  /** Recibe correo de cada pedido (nuevo, pago, comprobante, cancelación). Por defecto sí. */
+  notifyOrders: boolean;
   isActive: boolean;
   lastLoginAt: Date | null;
   resetPasswordToken: string | null;
@@ -29,6 +31,7 @@ const userSchema = new Schema<IUser>(
     phone: { type: String, default: "" },
     accountType: { type: String, enum: ACCOUNT_TYPES, default: "customer" },
     notifyHumanRequests: { type: Boolean, default: true },
+    notifyOrders: { type: Boolean, default: true },
     isActive: { type: Boolean, default: true },
     lastLoginAt: { type: Date, default: null },
     resetPasswordToken: { type: String, default: null },
