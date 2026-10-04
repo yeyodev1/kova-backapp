@@ -1,5 +1,16 @@
 import { Request, Response, NextFunction } from "express";
+import * as dropiStatusService from "../services/dropiStatus.service";
 import * as dropiSyncService from "../services/dropiSync.service";
+
+/** GET /api/admin/dropi/status?refresh=1 */
+export async function status(req: Request, res: Response, next: NextFunction) {
+  try {
+    const refresh = req.query.refresh === "1" || req.query.refresh === "true";
+    res.status(200).json(await dropiStatusService.getStatus(refresh));
+  } catch (error) {
+    next(error);
+  }
+}
 
 /** GET /api/admin/dropi/products?q&page&limit */
 export async function searchCatalog(req: Request, res: Response, next: NextFunction) {
@@ -13,13 +24,25 @@ export async function searchCatalog(req: Request, res: Response, next: NextFunct
   }
 }
 
-/** POST /api/admin/dropi/import — body: { dropiId, markupPercent? } */
+/** POST /api/admin/dropi/import — body: { dropiId? | url?, markupPercent? } */
 export async function importProduct(req: Request, res: Response, next: NextFunction) {
   try {
-    const { dropiId, markupPercent } = req.body ?? {};
+    const { dropiId, url, markupPercent } = req.body ?? {};
     const markup =
-      markupPercent === undefined || markupPercent === null ? undefined : Number(markupPercent);
-    res.status(200).json(await dropiSyncService.importProduct(Number(dropiId), markup));
+      markupPercent === undefined || markupPercent === null || markupPercent === ""
+        ? undefined
+        : Number(markupPercent);
+    const id = dropiSyncService.parseDropiReference(dropiId, url);
+    res.status(200).json(await dropiSyncService.importProduct(id, markup));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** POST /api/admin/products/:id/sync-dropi */
+export async function syncProduct(req: Request, res: Response, next: NextFunction) {
+  try {
+    res.status(200).json(await dropiSyncService.syncProduct(String(req.params.id)));
   } catch (error) {
     next(error);
   }
