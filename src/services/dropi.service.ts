@@ -80,10 +80,66 @@ async function request<T = any>(
       `[dropi] ${method} ${path} falló (${status ?? error?.code ?? "sin respuesta"}):`,
       payload ?? error?.message,
     );
+    if (payload?.ip && /access denied/i.test(String(payload?.message || ""))) {
+      throw new CustomError(
+        `Dropi bloquea la IP ${payload.ip}. Pide a soporte de Dropi que la agregue a tu integración.`,
+        502,
+        { status, blockedIp: String(payload.ip) },
+      );
+    }
     const message =
       (payload && typeof payload === "object" && (payload.message || payload.error)) ||
       (error?.code === "ECONNABORTED" ? "tiempo de espera agotado" : "no respondió");
     throw new CustomError(`Dropi: ${message}`, 502, { status, payload });
+  }
+}
+
+// ── Diagnóstico de la conexión ──────────────────────────────────────────────
+
+export interface DropiProbe {
+  ok: boolean;
+  status: number | null;
+  message: string;
+  /** IP de origen que Dropi reporta cuando rechaza por lista blanca. */
+  ip: string | null;
+}
+
+/**
+ * Llamada liviana para saber si Dropi nos deja entrar. No lanza: el panel necesita
+ * el cuerpo del 401 ("Access denied" + ip) para explicar el bloqueo.
+ */
+export async function probeConnection(): Promise<DropiProbe> {
+  try {
+    const response = await getClient().get<DropiResponse>("/department");
+    const body = response.data;
+    if (body && body.isSuccess === false) {
+      return { ok: false, status: response.status, message: String(body.message || ""), ip: null };
+    }
+    return { ok: true, status: response.status, message: "", ip: null };
+  } catch (error: any) {
+    if (error instanceof CustomError) throw error;
+    const payload = error?.response?.data;
+    const message =
+      (payload && typeof payload === "object" && String(payload.message || payload.error || "")) ||
+      (error?.code === "ECONNABORTED" ? "tiempo de espera agotado" : "no respondió");
+    const ip = payload && typeof payload === "object" && payload.ip ? String(payload.ip) : null;
+    return { ok: false, status: error?.response?.status ?? null, message, ip };
+  }
+}
+
+/**
+ * Lee el payload del token de integración (JWT) sin verificar la firma: solo se usan
+ * datos públicos como `integration_url`. El token nunca sale del servidor.
+ */
+export function integrationTokenPayload(): Record<string, any> | null {
+  const part = env.DROPI_INTEGRATION_KEY.split(".")[1];
+  if (!part) return null;
+  try {
+    const json = Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+    const payload = JSON.parse(json);
+    return payload && typeof payload === "object" ? payload : null;
+  } catch {
+    return null;
   }
 }
 
