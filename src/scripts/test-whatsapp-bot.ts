@@ -177,6 +177,24 @@ function fakeQuote(items: QuoteItem[], method: "card" | "transfer" | "cod") {
   };
 }
 
+type FakeOrder = OrderSummary & { idNumber?: string; email?: string };
+
+const order = (fields: Partial<FakeOrder>): FakeOrder => ({
+  id: "a",
+  number: "KV-1005",
+  status: "shipped",
+  paymentMethod: "cod",
+  paymentStatus: "cod",
+  total: 3790,
+  guide: "",
+  carrier: "",
+  paymentLink: "",
+  createdAt: new Date().toISOString(),
+  phone: "0990000001",
+  items: "1 x Licuadora Oster 600W vaso de vidrio",
+  ...fields,
+});
+
 interface Fake {
   deps: BotDeps;
   created: BotState[];
@@ -189,7 +207,7 @@ function fakeDeps(
     banks?: BankOption[];
     card?: boolean;
     media?: MediaOutcome;
-    orders?: OrderSummary[];
+    orders?: FakeOrder[];
     cardCheck?: CardCheck | null;
     whatsappPhone?: string;
   } = {},
@@ -236,8 +254,15 @@ function fakeDeps(
       );
     },
     checkCardPayment: async () => (options.cardCheck === undefined ? null : options.cardCheck),
-    findOrders: async (number) =>
-      (options.orders || []).filter((order) => !number || order.number === number),
+    // Como la búsqueda real: solo pedidos del teléfono del chat y, dentro de esos, por KV-, cédula o correo.
+    findOrders: async (query = {}) =>
+      (options.orders || []).filter(
+        (order: FakeOrder) =>
+          order.phone === (options.whatsappPhone ?? "0990000001") &&
+          (!query.number || order.number === query.number) &&
+          (!query.idNumber || order.idNumber === query.idNumber) &&
+          (!query.email || order.email === query.email),
+      ),
     saveLead: () => {
       fake.leads += 1;
     },
@@ -398,7 +423,13 @@ async function main() {
 
   await test("dos cuentas: elegir el banco por nombre en la pregunta", async () => {
     const fake = fakeDeps({ banks: [BANK_A, BANK_B] });
-    const results = await conversation(fake, ["cargador", "1", ...DATA, "transferencia", "guayaquil"]);
+    const results = await conversation(fake, [
+      "cargador",
+      "1",
+      ...DATA,
+      "transferencia",
+      "guayaquil",
+    ]);
     assert.equal(results[6].step, "bank");
     assert.match(results[6].reply, /A qué banco te queda mejor transferir/);
     assert.match(results[7].reply, /Transferencia bancaria · Banco Guayaquil/);
@@ -450,20 +481,8 @@ async function main() {
     assert.equal(result.step, "name");
   });
 
-  await test("consulta KV-: estado legible, guía y solo pedidos del teléfono", async () => {
-    const orders: OrderSummary[] = [
-      {
-        id: "a",
-        number: "KV-1005",
-        status: "shipped",
-        paymentMethod: "cod",
-        paymentStatus: "cod",
-        total: 3790,
-        guide: "SER123",
-        carrier: "Servientrega",
-        paymentLink: "",
-      },
-    ];
+  await test("consulta con KV-: estado claro, pago, guía, rastreo y qué sigue", async () => {
+    const orders = [order({ guide: "SER123", carrier: "Servientrega" })];
     const fake = fakeDeps({ orders });
     const [byNumber, mine, other] = await conversation(fake, [
       "como va el KV-1005",
@@ -471,9 +490,160 @@ async function main() {
       "KV-1999",
     ]);
     assert.equal(byNumber.route, "searchOrder");
-    assert.match(byNumber.reply, /KV-1005.*enviado.*Servientrega \*SER123\*/);
+    assert.match(byNumber.reply, /\*KV-1005\*/);
+    assert.match(byNumber.reply, /Estado: en camino/);
+    assert.match(byNumber.reply, /Pago: contra entrega: pagas \*\$37\.90\*/);
+    assert.match(byNumber.reply, /Guía: Servientrega \*SER123\*/);
+    assert.match(
+      byNumber.reply,
+      /https:\/\/kovashopper\.com\/rastrear\?number=KV-1005&phone=0990000001/,
+    );
     assert.match(mine.reply, /KV-1005/);
     assert.match(other.reply, /No encuentro el pedido \*KV-1999\*/);
+  });
+
+  await test("consulta sin número: busca por el WhatsApp; 'dónde está' y 'ya me llegó'", async () => {
+    const fake = fakeDeps({ orders: [order({ status: "sent_to_dropi" })] });
+    for (const text of [
+      "dónde está mi paquete?",
+      "ya me llegó?",
+      "cómo va mi pedido",
+      "mi pedido de ayer",
+    ]) {
+      const [result] = await conversation(fake, [text]);
+      assert.equal(result.decision, "R3:consultar_pedido", text);
+      assert.match(result.reply, /KV-1005.*\n[\s\S]*bodega/, text);
+      assert.equal(decideRoute(null, { message: text }).route, "conversation", text);
+    }
+  });
+
+  await test("tarjeta pendiente: incluye el link de pago", async () => {
+    const link = "https://kovashopper.com/pagar/tok999";
+    const fake = fakeDeps({
+      orders: [
+        order({
+          status: "pending_payment",
+          paymentMethod: "card",
+          paymentStatus: "pending",
+          paymentLink: link,
+        }),
+      ],
+    });
+    const [result] = await conversation(fake, ["mi pedido"]);
+    assert.match(result.reply, /Pago: pendiente con tarjeta/);
+    assert.ok(result.reply.includes(link));
+    assert.equal(result.paymentLink, link);
+  });
+
+  await test("varios pedidos: lista los últimos 3, pregunta cuál y muestra el elegido", async () => {
+    const orders = [
+      order({
+        id: "o4",
+        number: "KV-1004",
+        status: "transfer_review",
+        paymentMethod: "transfer",
+        paymentStatus: "pending",
+      }),
+      order({ id: "o3", number: "KV-1003", status: "delivered", paymentStatus: "paid" }),
+      order({ id: "o2", number: "KV-1002", status: "cancelled" }),
+      order({ id: "o1", number: "KV-1001", status: "shipped" }),
+    ];
+    const fake = fakeDeps({ orders });
+    const [list, picked] = await conversation(fake, ["como va mi pedido", "el 2"]);
+    assert.equal(list.decision, "R3:elegir_pedido");
+    assert.match(list.reply, /1\. \*KV-1004\*[\s\S]*2\. \*KV-1003\*[\s\S]*3\. \*KV-1002\*/);
+    assert.ok(!list.reply.includes("KV-1001"), "solo los últimos 3");
+    assert.deepEqual(list.state.orderChoices, ["KV-1004", "KV-1003", "KV-1002"]);
+    assert.equal(decideRoute(list.state, { message: "el 2" }).route, "conversation");
+    assert.equal(picked.decision, "R3:consultar_pedido");
+    assert.match(picked.reply, /\*KV-1003\*[\s\S]*entregado/);
+    assert.deepEqual(
+      picked.state.orderChoices,
+      [],
+      "la lista vale solo para la respuesta siguiente",
+    );
+  });
+
+  await test("pedido de otro teléfono: ni por KV-, ni por cédula, ni por correo", async () => {
+    const orders = [
+      order({
+        number: "KV-2001",
+        phone: "0980000002",
+        idNumber: "0926687856",
+        email: "otro@correo.com",
+      }),
+    ];
+    const fake = fakeDeps({ orders });
+    const [byNumber, byId, byEmail, plain] = await conversation(fake, [
+      "como va el KV-2001",
+      "mi pedido, mi cédula es 0926687856",
+      "mi pedido, mi correo es otro@correo.com",
+      "mi pedido",
+    ]);
+    for (const result of [byNumber, byId, byEmail, plain]) {
+      assert.ok(!result.reply.includes("KV-2001") || /No encuentro el pedido/.test(result.reply));
+      assert.equal(result.decision, "R3:sin_pedidos");
+    }
+    assert.match(byId.reply, /Por seguridad/);
+  });
+
+  await test("por cédula o correo: filtra dentro de los pedidos del WhatsApp", async () => {
+    const orders = [
+      order({
+        number: "KV-1010",
+        idNumber: "0926687856",
+        status: "confirmed",
+        paymentMethod: "card",
+        paymentStatus: "paid",
+      }),
+      order({ number: "KV-1009", email: "ana@correo.com", status: "shipped" }),
+    ];
+    const fake = fakeDeps({ orders });
+    const [byId, byEmail] = await conversation(fake, [
+      "mi pedido, cédula 0926687856",
+      "estado de mi pedido ana@correo.com",
+    ]);
+    assert.match(byId.reply, /\*KV-1010\*[\s\S]*Pago: confirmado/);
+    assert.match(byEmail.reply, /\*KV-1009\*/);
+  });
+
+  await test("a mitad de compra: consulta el pedido y retoma la pregunta pendiente", async () => {
+    const fake = fakeDeps({ orders: [order({ status: "shipped", guide: "G1" })] });
+    const [, , , askName, query, resumed] = await conversation(fake, [
+      "busco una licuadora",
+      "1",
+      "1",
+      "Ana Pérez",
+      "oye y dónde está mi pedido?",
+      "Guayaquil",
+    ]);
+    assert.equal(askName.step, "city");
+    assert.equal(query.route, "searchOrder");
+    assert.match(query.reply, /KV-1005[\s\S]*Y seguimos con tu compra[\s\S]*ciudad/i);
+    assert.equal(query.step, "city");
+    assert.equal(query.state.cart.length, 1, "el carrito sigue intacto");
+    assert.equal(resumed.state.cityId, 10);
+  });
+
+  await test("'cuándo llega?' antes de comprar y sin pedidos no responde 'no encuentro pedidos'", async () => {
+    const [result] = await conversation(fakeDeps(), ["cuando llega si compro hoy?"]);
+    assert.notEqual(result.decision, "R3:sin_pedidos");
+  });
+
+  await test("reclamo, garantía y producto dañado: a human como reclamo", async () => {
+    for (const text of [
+      "tengo un reclamo",
+      "mi licuadora llegó dañada",
+      "el parlante no prende",
+      "quiero hacer una devolución",
+    ]) {
+      const [result] = await conversation(fakeDeps(), [text]);
+      assert.equal(result.decision, "R2:reclamo", text);
+      assert.equal(result.route, "human", text);
+      assert.equal(decideRoute(null, { message: text }).route, "human", text);
+    }
+    const [link] = await conversation(fakeDeps(), ["el link de pago no funciona"]);
+    assert.notEqual(link.decision, "R2:reclamo", "un link que falla no es reclamo de producto");
   });
 
   await test("asesor, reclamo y garantía van a human", async () => {
