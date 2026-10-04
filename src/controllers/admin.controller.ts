@@ -33,6 +33,24 @@ export async function createProduct(req: Request, res: Response, next: NextFunct
   }
 }
 
+/** GET /api/admin/products/categories */
+export async function productCategories(_req: Request, res: Response, next: NextFunction) {
+  try {
+    res.status(200).json(await adminService.productCategories());
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** POST /api/admin/uploads/image (multipart `image`) */
+export async function uploadImage(req: Request, res: Response, next: NextFunction) {
+  try {
+    res.status(201).json(await adminService.uploadProductImage(req.file));
+  } catch (error) {
+    next(error);
+  }
+}
+
 /** GET /api/admin/products/:id */
 export async function getProduct(req: Request, res: Response, next: NextFunction) {
   try {
