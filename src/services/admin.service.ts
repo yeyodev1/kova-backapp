@@ -3,6 +3,7 @@ import { CustomError } from "../errors/customError.error";
 import { Lead } from "../models/lead.model";
 import { ORDER_STATUSES, Order, PAYMENT_METHODS } from "../models/order.model";
 import { Product } from "../models/product.model";
+import { User } from "../models/user.model";
 import { getSettings, Setting } from "../models/setting.model";
 import { compareAtFor, defaultOffers, salePrice } from "../utils/pricing";
 import { escapeRegex } from "../utils/regex";
@@ -567,4 +568,35 @@ export async function updateSettings(body: any) {
   await getSettings();
   await Setting.updateOne({ key: "main" }, { $set: update });
   return getAdminSettings();
+}
+
+// ── Equipo: avisos por correo ───────────────────────────────────────────────
+
+/** Administradores y si reciben el correo cuando un cliente del bot pide un asesor. */
+export async function listTeam() {
+  const admins = await User.find({ accountType: "admin" })
+    .select("name email isActive notifyHumanRequests")
+    .sort({ createdAt: 1 })
+    .lean();
+  return admins.map((admin: any) => ({
+    _id: String(admin._id),
+    name: admin.name || "",
+    email: admin.email,
+    isActive: admin.isActive !== false,
+    notifyHumanRequests: admin.notifyHumanRequests !== false,
+  }));
+}
+
+export async function updateTeamMember(id: string, body: any) {
+  if (!isValidObjectId(id)) throw new CustomError("Administrador no encontrado", 404);
+  if (typeof body?.notifyHumanRequests !== "boolean") {
+    throw new CustomError("Indica si recibe o no los avisos", 400);
+  }
+  const admin = await User.findOneAndUpdate(
+    { _id: id, accountType: "admin" },
+    { $set: { notifyHumanRequests: body.notifyHumanRequests } },
+    { new: true },
+  ).lean();
+  if (!admin) throw new CustomError("Administrador no encontrado", 404);
+  return (await listTeam()).find((member) => member._id === id);
 }
