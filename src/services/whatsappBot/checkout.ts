@@ -1,4 +1,5 @@
 import { normalizeEcPhone } from "../../utils/phone";
+import { bankFromText } from "../banks";
 import type { Extraction } from "./extractor";
 import {
   BotPaymentMethod,
@@ -43,6 +44,24 @@ export function availableMethods(deps: BotDeps): BotPaymentMethod[] {
 
 export const chosenBank = (state: BotState, deps: BotDeps): BankOption | null =>
   state.bankIndex >= 0 ? deps.banks[state.bankIndex] || null : null;
+
+/**
+ * Banco que nombra el cliente entre las cuentas activas: elige transferencia y
+ * esa cuenta. `choosing` = se le preguntó la forma de pago o el banco.
+ */
+export function pickBankFromText(
+  state: BotState,
+  deps: BotDeps,
+  text: string,
+  choosing: boolean,
+): boolean {
+  if (!deps.banks.length) return false;
+  const account = bankFromText(text, deps.banks, choosing);
+  if (!account) return false;
+  state.paymentMethod = "transfer";
+  state.bankIndex = deps.banks.indexOf(account);
+  return true;
+}
 
 /** Primer dato que falta para cerrar el pedido. */
 export function missingStage(state: BotState, deps: BotDeps): BotState["stage"] {
@@ -343,6 +362,8 @@ export async function applyStageAnswer(
     }
     case "payment": {
       const options = state.paymentOptions.length ? state.paymentOptions : availableMethods(deps);
+      // "te pago por Pichincha": transferencia y banco en un solo mensaje.
+      if (options.includes("transfer") && pickBankFromText(state, deps, text, true)) return true;
       const choice = extractChoice(text, options.length);
       const named = detectPaymentMethod(text);
       const method = named && options.includes(named) ? named : choice ? options[choice - 1] : null;
@@ -352,18 +373,11 @@ export async function applyStageAnswer(
     }
     case "bank": {
       const choice = extractChoice(text, deps.banks.length);
-      const value = normalize(text);
-      const index = choice
-        ? choice - 1
-        : deps.banks.findIndex((account) =>
-            normalize(account.bank)
-              .replace(/^banco (del |de )?/, "")
-              .split(" ")
-              .some((word) => word.length > 3 && value.includes(word)),
-          );
-      if (index < 0) return "retry";
-      state.bankIndex = index;
-      return true;
+      if (choice) {
+        state.bankIndex = choice - 1;
+        return true;
+      }
+      return pickBankFromText(state, deps, text, true) || "retry";
     }
     default:
       return false;
