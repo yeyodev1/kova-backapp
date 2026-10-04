@@ -1,5 +1,6 @@
 import { Resend } from "resend";
 import { env } from "../config/env";
+import { reportIncident } from "./incidents.service";
 
 let resend: Resend | null = null;
 
@@ -35,14 +36,35 @@ export async function sendEmail(
     });
     if (error) {
       console.error(`[email] Resend rechazó "${subject}" a ${to}:`, error);
+      reportEmailFailure(to, subject, (error as any)?.message || String(error));
       return false;
     }
     console.info(`[email] enviado "${subject}" a ${to}`);
     return true;
   } catch (error) {
     console.error(`[email] falló "${subject}" a ${to}:`, error);
+    reportEmailFailure(to, subject, (error as any)?.message || String(error));
     return false;
   }
+}
+
+/**
+ * Correo que Resend no aceptó (con Resend configurado). Se agrupa por destinatario y
+ * evento: el asunto sin números (KV-1001, montos) dice qué correo era.
+ */
+function reportEmailFailure(to: string, subject: string, reason: string) {
+  const event = subject
+    .replace(/\b(KV|IN)-\d+\b/gi, "#")
+    .replace(/\$?\d[\d.,]*/g, "#")
+    .toLowerCase()
+    .slice(0, 80);
+  void reportIncident({
+    type: "email_failed",
+    severity: "low",
+    title: `No se pudo enviar un correo a ${to}`,
+    detail: `Asunto: ${subject}\nMotivo: ${reason}`,
+    key: `${to.toLowerCase()}|${event}`,
+  });
 }
 
 // ── Plantilla ───────────────────────────────────────────────────────────────
