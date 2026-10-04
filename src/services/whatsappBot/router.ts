@@ -13,6 +13,7 @@ import {
   availableMethods,
   confirmOrder,
   missingStage,
+  pickBankFromText,
   resetNamedField,
   retryText,
 } from "./checkout";
@@ -301,7 +302,17 @@ export async function handleTurn(
     }
     if (state.paymentMethod !== namedMethod)
       Object.assign(state, { paymentMethod: namedMethod, bankIndex: -1 });
+    // "transfiero por Pichincha": ya trae el banco, no se le pregunta.
+    if (namedMethod === "transfer") pickBankFromText(state, deps, message, true);
     return askNext(state, deps, "R6:pago", "Perfecto 👍");
+  }
+  // "mejor te pago por Pichincha" en el resumen: cambia a transferencia a ese banco.
+  if (
+    state.stage === "confirm" &&
+    extraction.intent !== "pregunta" &&
+    pickBankFromText(state, deps, message, false)
+  ) {
+    return askNext(state, deps, "R6:banco", "Perfecto 👍");
   }
 
   // R7: confirmación del resumen.
