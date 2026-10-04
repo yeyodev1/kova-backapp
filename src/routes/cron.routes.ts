@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { env } from "../config/env";
 import { dbConnect, isConnected } from "../config/mongo";
 import { CustomError } from "../errors/customError.error";
+import * as dropiController from "../controllers/dropi.controller";
 
 const router = Router();
 
@@ -22,20 +23,23 @@ function soloCron(req: Request, _res: Response, next: NextFunction) {
   next();
 }
 
-/**
- * GET /api/cron/ping — tarea de ejemplo (ver `crons` en vercel.json).
- * Vercel Cron solo hace GET, de ahí el verbo aunque la tarea escriba.
- */
-router.get("/ping", soloCron, async (_req, res, next) => {
+async function conBaseDeDatos(_req: Request, _res: Response, next: NextFunction) {
   try {
     if (!isConnected() && !(await dbConnect())) {
       throw new CustomError("Sin base de datos", 503);
     }
-    console.log("[cron] ping");
-    res.status(200).json({ ok: true, at: new Date().toISOString() });
+    next();
   } catch (error) {
     next(error);
   }
-});
+}
+
+// Vercel Cron solo hace GET, de ahí el verbo aunque las tareas escriban.
+
+/** GET /api/cron/dropi-orders — cada hora: estados y guías. */
+router.get("/dropi-orders", soloCron, conBaseDeDatos, dropiController.syncOrders);
+
+/** GET /api/cron/dropi-products — cada 6 horas: stock y costo. */
+router.get("/dropi-products", soloCron, conBaseDeDatos, dropiController.syncProducts);
 
 export default router;
