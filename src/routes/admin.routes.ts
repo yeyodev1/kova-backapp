@@ -11,6 +11,7 @@ router.use(authMiddleware, adminMiddleware);
 
 router.get("/dashboard", adminController.dashboard);
 
+router.get("/dropi/status", dropiController.status);
 router.get("/dropi/products", dropiController.searchCatalog);
 router.post("/dropi/import", dropiController.importProduct);
 router.post("/dropi/sync-products", dropiController.syncProducts);
@@ -22,6 +23,7 @@ router.post("/products", adminController.createProduct);
 router.get("/products/:id", adminController.getProduct);
 router.put("/products/:id", adminController.updateProduct);
 router.delete("/products/:id", adminController.deleteProduct);
+router.post("/products/:id/sync-dropi", dropiController.syncProduct);
 router.post(
   "/products/:id/images",
   uploadMiddleware.single("image"),
