@@ -46,6 +46,27 @@ URL registrada en el token y el texto listo para mandarle a soporte.
 No se intenta saltar el bloqueo (nada de scraping ni de usar la sesión de la web de Dropi): la única vía es
 la lista blanca de la integración.
 
+## Pedidos a mano (mientras la API esté bloqueada)
+
+Los pedidos no llegan solos a Dropi. En el panel:
+
+1. **Un pedido:** en el detalle, tarjeta Dropi → **Copiar datos para Dropi**. Pega el bloque como guía mientras
+   llenas el pedido en app.dropi.ec (cliente, dirección, productos con su ID de Dropi y variación, y valor a
+   recaudar si es contra entrega). Luego **Ya lo creé en Dropi** con el ID del pedido de Dropi (y la guía si ya la tienes).
+2. **Varios pedidos:** en Pedidos → **Exportar para Dropi (Excel)**. Descarga un CSV (abre directo en Excel) con
+   una fila por producto y todos los datos. Por defecto trae los `confirmed` que aún no tienen ID de Dropi;
+   respeta los filtros de la lista o los pedidos marcados.
+   Dropi tiene **carga masiva** en **Mis pedidos → Carga masiva**: ahí se descarga **su propia plantilla**.
+   Las columnas de esa plantilla cambian según la cuenta, así que el CSV no intenta imitarla: trae todos los
+   datos con nombres claros (Nombre, Apellido, Celular, Cédula, Provincia, Ciudad, Dirección, Referencia,
+   ID producto Dropi, ID variación Dropi, Cantidad, Cobrar al entregar, Valor a recaudar...) para copiar columna
+   por columna a la plantilla de Dropi y subirla.
+3. Después de subirlos, marca cada pedido con **Ya lo creé en Dropi** y, cuando haya guía, actualízala en
+   **Envío** (enviado, entregado, devuelto). El cliente lo ve en `/rastrear`.
+
+Rutas: `GET /api/admin/orders/export`, `POST /api/admin/orders/:id/dropi-manual`, `PUT /api/admin/orders/:id/shipping`
+(ver `docs/API.md`).
+
 ## Mantenerse al día
 
 - Importar: `POST /api/admin/dropi/import` con el id o el link del producto. Guarda todo en Mongo como borrador.
