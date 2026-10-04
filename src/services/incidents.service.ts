@@ -92,14 +92,29 @@ export async function reportIncident(report: IncidentReport): Promise<void> {
     const detail = text(report.detail, 2000);
     const now = new Date();
 
-    // Primero se intenta sumar a la abierta; si no hay, se crea.
+    // Primero se intenta sumar a la abierta; si no hay, se crea. Una repetición deja lo
+    // nuevo como nota (no pisa el primer detalle); un barrido solo refresca el texto.
+    const sweep = report.countOccurrence === false;
     const bump = async () =>
       Incident.findOneAndUpdate(
         { openKey: key },
         {
-          $inc: { occurrences: report.countOccurrence === false ? 0 : 1 },
-          $set: { lastSeenAt: now, ...(detail ? { detail } : {}) },
+          $inc: { occurrences: sweep ? 0 : 1 },
+          $set: {
+            lastSeenAt: now,
+            ...(sweep ? { title: text(report.title, 200), ...(detail ? { detail } : {}) } : {}),
+          },
           $max: { severityRank: SEVERITY_RANK[severity] },
+          ...(!sweep && detail
+            ? {
+                $push: {
+                  notes: {
+                    $each: [{ at: now, by: null, byName: SYSTEM, text: `Se repitió: ${detail}` }],
+                    $slice: -200,
+                  },
+                },
+              }
+            : {}),
         },
         { new: true },
       );
