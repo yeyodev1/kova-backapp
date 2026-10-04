@@ -91,9 +91,38 @@ vuelve a pedir. "cancelar" / "vaciar carrito" vacía el carrito. "reiniciatodo" 
 
 ## Consultas de pedido
 
-"mi pedido", "cómo va mi pedido", "KV-1007", "kv 1007": estado legible + guía y transportadora si existen. Solo
-muestra pedidos **del teléfono del chat**; un `KV-` de otro número responde "no lo encuentro con este número,
-revísalo en kovashopper.com/rastrear". Un pedido con tarjeta sin pagar incluye su link.
+El bot **siempre** responde desde Mongo en vivo (`deps.findOrders`, sin caché) y solo con pedidos **del teléfono del
+chat**. Funciona desde cualquier paso: a mitad de una compra responde el estado y después repite la pregunta pendiente
+("Y seguimos con tu compra 🛒 …") sin tocar el carrito.
+
+| El cliente escribe | Qué pasa |
+|---|---|
+| "cómo va mi pedido", "dónde está mi paquete", "ya me llegó?", "no me ha llegado", "mi pedido de ayer" | Busca por el WhatsApp. Uno: detalle. Varios: lista los **últimos 3** y pregunta cuál ("el 2" o el `KV-`); "de hoy/ayer/anteayer" filtra por día de Ecuador |
+| "KV-1007", "kv 1007", "pedido 1007" | Ese pedido si es de este teléfono |
+| "mi pedido, cédula 09…" / "…ana@correo.com" | Filtra **dentro** de los pedidos del teléfono por cédula o correo |
+| KV-, cédula o correo de **otro** teléfono | "No encuentro… Por seguridad solo te muestro pedidos hechos con este número de WhatsApp" + `/rastrear`. Nunca confirma que exista |
+| "cuándo llega?" sin "mi" ni KV-, y sin pedidos | No es consulta: sigue como pregunta normal (tiempos de envío) |
+| WhatsApp oculto (`@lid`) | Pide el número `KV-` antes de buscar |
+
+Detalle: estado en lenguaje claro, pago (confirmado / pendiente con tarjeta o transferencia / contra entrega: cuánto
+paga al recibir), productos, guía y transportadora si hay, link de rastreo
+`https://kovashopper.com/rastrear?number=KV-…&phone=09…`, link de pago si la tarjeta sigue pendiente, y qué sigue.
+Si el pedido espera comprobante, el siguiente archivo se guarda en ese pedido (salvo que haya una compra en curso).
+
+`/brain` manda estas consultas (y la respuesta "el 2" a la lista) a `conversation`; `/search-order` también procesa el
+turno completo. Decisiones: `R3:consultar_pedido`, `R3:elegir_pedido`, `R3:sin_pedidos`, `R3:pedir_numero_pedido`.
+
+## Incidencias desde el bot
+
+Además del correo al equipo, quedan en Panel → Incidencias (`docs/API.md`, "Incidencias"):
+
+- **Reclamo** (reclamo, queja, garantía, devolución, reembolso, dañado, roto, defectuoso, "llegó mal", "no prende";
+  "el link no funciona" no cuenta): decisión `R2:reclamo`, ruta `human`, incidencia `customer_complaint` (alta) con lo
+  que escribió y su último pedido (o el `KV-` que mencionó).
+- **Pide asesor**: `R2:humano` → `human_request` (media).
+- **Error en un turno** (excepción): `bot_error` (media) por teléfono. **Gemini falla 3 veces seguidas**: `bot_error`
+  con clave `gemini` (el bot sigue con reglas).
+- El mismo problema abierto suma "×N" y guarda cada mensaje nuevo como nota.
 
 ## Endpoints
 
@@ -169,7 +198,7 @@ Rules de 🧠 Principal:
 | `catalog` | 📚 Catálogo | Pide el catálogo |
 | `checkoutCard` | 💳 Checkout tarjeta | "sí" al resumen con tarjeta |
 | `checkoutTransfer` | 🏦 Checkout transferencia | "sí" al resumen con transferencia, o llega una foto/PDF |
-| `human` | 🙋 Asesor humano | Asesor, reclamo, garantía, devolución |
+| `human` | 🙋 Asesor humano | Asesor, reclamo, garantía, devolución, producto dañado |
 | `silenced` | **Sin Rule** | La sesión está silenciada (pidió asesor hace < 60 min o el panel la silenció): el bot no contesta |
 
 Nunca una Rule hacia el mismo flujo (bucle). Los flujos destino no llevan Rules. Contra entrega no necesita flujo
