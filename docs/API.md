@@ -192,6 +192,7 @@ interface ClipProduct {
   images: string[];             // solo https, máx 12, sin duplicados (las demás se descartan)
   costPrice?: number;           // centavos, entero ≥ 0 (precio proveedor)
   suggestedPrice?: number;      // centavos, entero ≥ 0
+  price?: number;               // centavos, precio de venta manual (solo productos nuevos; gana sobre el calculado)
   description?: string;         // HTML, se pasa por sanitize-html
   stock?: number;               // entero ≥ 0
   category?: string;
@@ -203,6 +204,9 @@ interface ClipProduct {
 - **Nuevo** `dropiId` → borrador (`isPublished: false`) con las mismas reglas que `/admin/dropi/import`
   (`createDraftProduct`): precio = sugerido si es mayor al costo, si no costo × (1 + margen) redondeado a .90;
   tachado +40%; ofertas 1/2/3 u; slug único. Con variantes: precio de cada una con su costo (o el del producto).
+  Si viene `price` se usa ese. Sin costo, sugerido ni `price` queda con precio 0, sin tachado ni ofertas, y el
+  resultado trae `message: "Quedó sin precio: ponle precio antes de publicar"`. (Dropi dibuja los precios del
+  catálogo en canvas: el costo lo escribe el dueño en el panel.)
 - **Existente** → solo costo, sugerido, stock (y el de variantes con el mismo `dropiVariationId`), imágenes si no
   tenía y `lastSyncedAt`. Nunca toca precio, textos, ofertas ni publicado.
 
