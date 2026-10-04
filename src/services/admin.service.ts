@@ -16,6 +16,43 @@ const TIMEZONE = "America/Guayaquil";
 const OFFSET_MS = 5 * 60 * 60 * 1000;
 /** Estados que no cuentan como venta: intentos de tarjeta sin pagar o fallidos. */
 const NOT_SALES = ["pending_payment", "failed", "cancelled"];
+/** Un pedido creado en Dropi sin guía después de esto ya hay que reclamarlo. */
+const GUIDE_WAIT_MS = 48 * 60 * 60 * 1000;
+
+export type OrderTodo = "dropi" | "receipt" | "guide";
+
+/**
+ * "Por gestionar": pedidos que esperan una acción del equipo.
+ * - confirmado sin pedido en Dropi → pasarlo a Dropi
+ * - comprobante subido → revisarlo
+ * - en Dropi sin guía hace más de 48 h → pedir la guía
+ */
+function todoFilter(now = Date.now()) {
+  return {
+    $or: [
+      { status: "confirmed", "dropi.orderId": null },
+      { status: "transfer_review" },
+      {
+        status: "sent_to_dropi",
+        "dropi.guide": { $in: ["", null] },
+        history: {
+          $elemMatch: { status: "sent_to_dropi", at: { $lt: new Date(now - GUIDE_WAIT_MS) } },
+        },
+      },
+    ],
+  };
+}
+
+/** Mismo criterio que `todoFilter`, para etiquetar cada fila con lo que falta hacer. */
+function orderTodo(order: any, now = Date.now()): OrderTodo | null {
+  if (order.status === "confirmed" && !order.dropi?.orderId) return "dropi";
+  if (order.status === "transfer_review") return "receipt";
+  if (order.status === "sent_to_dropi" && !order.dropi?.guide) {
+    const sentAt = (order.history || []).find((h: any) => h.status === "sent_to_dropi")?.at;
+    if (sentAt && new Date(sentAt).getTime() < now - GUIDE_WAIT_MS) return "guide";
+  }
+  return null;
+}
 
 function paging(query: { page?: unknown; limit?: unknown }, defaultLimit = 20) {
   const page = Math.max(Number(query.page) || 1, 1);
@@ -44,7 +81,7 @@ export async function dashboard() {
   const today = startOfTodayEc();
   const weekStart = new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000);
 
-  const [todayAgg, pendingTransfers, dropiErrors, byStatus, byDay] = await Promise.all([
+  const [todayAgg, pendingTransfers, dropiErrors, todoCount, byStatus, byDay] = await Promise.all([
     Order.aggregate([
       { $match: { createdAt: { $gte: today }, status: { $nin: NOT_SALES } } },
       { $group: { _id: null, orders: { $sum: 1 }, revenue: { $sum: "$total" } } },
@@ -55,6 +92,7 @@ export async function dashboard() {
       "dropi.orderId": null,
       "dropi.error": { $ne: "" },
     }),
+    Order.countDocuments(todoFilter()),
     Order.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
     Order.aggregate([
       { $match: { createdAt: { $gte: weekStart }, status: { $nin: NOT_SALES } } },
@@ -85,6 +123,7 @@ export async function dashboard() {
     revenueToday: todayAgg[0]?.revenue || 0,
     pendingTransfers,
     dropiErrors,
+    todoCount,
     ordersByStatus,
     last7Days,
   };
@@ -95,25 +134,32 @@ export async function dashboard() {
 export async function listOrders(query: Record<string, unknown>) {
   const { page, limit, skip } = paging(query);
   const filter: Record<string, unknown> = {};
+  // Varias condiciones con $or (búsqueda y "por gestionar") solo conviven dentro de $and.
+  const and: Record<string, unknown>[] = [];
+  if (query.todo === "1" || query.todo === "true") and.push(todoFilter());
   const status = String(query.status ?? "");
   if (status && (ORDER_STATUSES as readonly string[]).includes(status)) filter.status = status;
   const method = String(query.paymentMethod ?? "");
   if (method && (PAYMENT_METHODS as readonly string[]).includes(method))
     filter.paymentMethod = method;
-  if (query.dropiError === "1" || query.dropiError === "true") filter["dropi.error"] = { $nin: ["", null] };
+  if (query.dropiError === "1" || query.dropiError === "true")
+    filter["dropi.error"] = { $nin: ["", null] };
   const q = String(query.q ?? "")
     .trim()
     .slice(0, 80);
   if (q) {
     const regex = { $regex: escapeRegex(q), $options: "i" };
-    filter.$or = [
-      { number: regex },
-      { "customer.phone": regex },
-      { "customer.firstName": regex },
-      { "customer.lastName": regex },
-      { "customer.email": regex },
-    ];
+    and.push({
+      $or: [
+        { number: regex },
+        { "customer.phone": regex },
+        { "customer.firstName": regex },
+        { "customer.lastName": regex },
+        { "customer.email": regex },
+      ],
+    });
   }
+  if (and.length) filter.$and = and;
 
   const [items, total] = await Promise.all([
     Order.find(filter)
@@ -124,7 +170,9 @@ export async function listOrders(query: Record<string, unknown>) {
       .lean(),
     Order.countDocuments(filter),
   ]);
-  return paginated(items, total, page, limit);
+  const now = Date.now();
+  const withTodo = items.map((order: any) => ({ ...order, todo: orderTodo(order, now) }));
+  return paginated(withTodo, total, page, limit);
 }
 
 export async function getOrder(id: string) {
@@ -241,7 +289,9 @@ function hasValue(value: unknown): boolean {
  */
 export async function createProduct(body: any) {
   const input = body ?? {};
-  const title = String(input.title ?? "").trim().slice(0, 200);
+  const title = String(input.title ?? "")
+    .trim()
+    .slice(0, 200);
   if (!title) throw new CustomError("Ponle un nombre al producto", 400);
 
   const dropiId = dropiIdOrNull(input.dropiId, "El ID de Dropi");
@@ -350,7 +400,8 @@ export async function updateProduct(id: string, body: any) {
   if (input.slug !== undefined) {
     // Un link pegado por error (ej. el de Dropi) no debe impedir guardar: se rehace con el título.
     const raw = String(input.slug);
-    const slug = (/dropi\./i.test(raw) ? "" : slugify(raw)) || slugify(String(input.title ?? product.title));
+    const slug =
+      (/dropi\./i.test(raw) ? "" : slugify(raw)) || slugify(String(input.title ?? product.title));
     if (!slug) throw new CustomError("Ponle un nombre al producto", 400);
     if (await Product.exists({ slug, _id: { $ne: product._id } })) {
       throw new CustomError("Ya existe otro producto con ese slug", 409);
@@ -399,7 +450,8 @@ export async function updateProduct(id: string, body: any) {
       }
       if (change.costPrice !== undefined)
         variant.costPrice = cents(change.costPrice, "El costo de la variante", true);
-      if (change.stock !== undefined) variant.stock = units(change.stock, "El stock de la variante");
+      if (change.stock !== undefined)
+        variant.stock = units(change.stock, "El stock de la variante");
       if (change.compareAtPrice !== undefined) {
         variant.compareAtPrice = cents(
           change.compareAtPrice,
@@ -482,7 +534,9 @@ export async function listLeads(query: Record<string, unknown>) {
   ]);
 
   // El lead solo guarda ids: el panel necesita nombre e imagen para escribirle al cliente.
-  const productIds = [...new Set(items.flatMap((l: any) => l.items.map((i: any) => String(i.productId))))];
+  const productIds = [
+    ...new Set(items.flatMap((l: any) => l.items.map((i: any) => String(i.productId)))),
+  ];
   const products = await Product.find({ _id: { $in: productIds } })
     .select("title images variants._id variants.name")
     .lean();
@@ -572,10 +626,10 @@ export async function updateSettings(body: any) {
 
 // ── Equipo: avisos por correo ───────────────────────────────────────────────
 
-/** Administradores y si reciben el correo cuando un cliente del bot pide un asesor. */
+/** Administradores y qué avisos por correo reciben (pedidos y asesor del bot). */
 export async function listTeam() {
   const admins = await User.find({ accountType: "admin" })
-    .select("name email isActive notifyHumanRequests")
+    .select("name email isActive notifyHumanRequests notifyOrders")
     .sort({ createdAt: 1 })
     .lean();
   return admins.map((admin: any) => ({
@@ -584,17 +638,25 @@ export async function listTeam() {
     email: admin.email,
     isActive: admin.isActive !== false,
     notifyHumanRequests: admin.notifyHumanRequests !== false,
+    notifyOrders: admin.notifyOrders !== false,
   }));
 }
 
 export async function updateTeamMember(id: string, body: any) {
   if (!isValidObjectId(id)) throw new CustomError("Administrador no encontrado", 404);
-  if (typeof body?.notifyHumanRequests !== "boolean") {
-    throw new CustomError("Indica si recibe o no los avisos", 400);
+  const update: Record<string, boolean> = {};
+  for (const key of ["notifyOrders", "notifyHumanRequests"]) {
+    if (typeof body?.[key] === "boolean") update[key] = body[key];
+  }
+  if (!Object.keys(update).length) {
+    throw new CustomError(
+      "Indica qué avisos recibe: pedidos (notifyOrders) o asesor (notifyHumanRequests)",
+      400,
+    );
   }
   const admin = await User.findOneAndUpdate(
     { _id: id, accountType: "admin" },
-    { $set: { notifyHumanRequests: body.notifyHumanRequests } },
+    { $set: update },
     { new: true },
   ).lean();
   if (!admin) throw new CustomError("Administrador no encontrado", 404);
