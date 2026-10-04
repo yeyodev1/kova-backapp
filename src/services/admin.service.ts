@@ -347,8 +347,10 @@ export async function updateProduct(id: string, body: any) {
   }
   // El slug solo cambia si se pide: cambiarlo rompe links ya compartidos en anuncios.
   if (input.slug !== undefined) {
-    const slug = slugify(String(input.slug));
-    if (!slug) throw new CustomError("El slug no es válido", 400);
+    // Un link pegado por error (ej. el de Dropi) no debe impedir guardar: se rehace con el título.
+    const raw = String(input.slug);
+    const slug = (/dropi\./i.test(raw) ? "" : slugify(raw)) || slugify(String(input.title ?? product.title));
+    if (!slug) throw new CustomError("Ponle un nombre al producto", 400);
     if (await Product.exists({ slug, _id: { $ne: product._id } })) {
       throw new CustomError("Ya existe otro producto con ese slug", 409);
     }
