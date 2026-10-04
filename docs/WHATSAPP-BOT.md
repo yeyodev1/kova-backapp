@@ -52,9 +52,12 @@ Código: `src/services/whatsappBot/*` (máquina de estados pura), `src/services/
    - cédula y correo, **opcionales** en una sola pregunta ("no" la salta). La cédula se valida (dígito verificador);
    - forma de pago con el total de cada una (recargos de `settings`):
      **Tarjeta** (el mejor precio, solo si Payphone está configurado), **Transferencia** (+`transferSurcharge`, solo
-     si hay `settings.bankAccounts`), **Contra entrega** (+`codSurcharge`, "pagas al recibir"). Con un solo método no
+     con "Aceptar transferencias" encendido en `/admin/pagos` y al menos una cuenta activa), **Contra entrega** (+`codSurcharge`, "pagas al recibir"). Con un solo método no
      pregunta;
-   - **banco** si hay varias cuentas: muestra solo los nombres y luego manda solo la cuenta elegida.
+   - **banco** si hay varias cuentas activas: "A qué banco te queda mejor transferir?" con solo los nombres; manda
+     solo la cuenta elegida. Con una sola activa no pregunta. El cliente puede nombrarlo directo ("te pago por
+     Pichincha", también en el resumen); "Quito, Pichincha" en la dirección no cuenta como banco
+     (`bankFromText` en `services/banks.ts`).
    El cliente puede mandar todo junto ("soy Carla Mendoza, Guayaquil, Urdesa calle Guayacanes 214, frente a la
    panadería"): con IA se extrae todo; sin IA se va paso a paso.
 6. **Resumen** con el total del quote (envío y recargo incluidos) → "sí".
@@ -220,8 +223,14 @@ El panel muestra esta misma guía con URLs completas en `GET /api/whatsapp-bot/a
 | `PUBLIC_WEB_URL` | Base del link de pago (`https://kovashopper.com/pagar/<token>`). |
 | Ya existentes | `PAYPHONE_TOKEN`, `PAYPHONE_STORE_ID` (sin ellos no se ofrece tarjeta), `CLOUDINARY_*`, `RESEND_*`. |
 
-Cuentas de transferencia y recargos: panel → Configuración (`settings.bankAccounts`, `codSurcharge`,
-`transferSurcharge`). Sin cuentas, ni la web ni el bot ofrecen transferencia.
+## Cuentas para transferencias
+
+Se gestionan en el panel: **Pagos y bancos** (`/admin/pagos`, API `/admin/payments`). Interruptor "Aceptar
+transferencias" + cuentas con banco del catálogo (logo automático por dominio vía Google favicons), tipo
+(Ahorros/Corriente/Transaccional), número, titular, cédula/RUC y un interruptor para pausarla. El bot solo ve las
+cuentas **activas** y solo si el interruptor está encendido; apagado, no ofrece transferencia y si el cliente la pide
+responde que no está activa. Los pedidos que ya esperaban transferencia siguen viendo su cuenta.
+Recargo contra entrega: panel → Ajustes (`codSurcharge`).
 
 ## Panel (admin)
 
@@ -273,7 +282,8 @@ pnpm test:bot              # conversaciones completas sin red ni Mongo (dependen
 VERBOSE=1 pnpm test:bot    # imprime las conversaciones
 ```
 
-Cubre: compra con tarjeta (oferta de 2 u), transferencia con dos bancos + comprobante, contra entrega, variante,
+Cubre: compra con tarjeta (oferta de 2 u), transferencia con dos bancos + comprobante, transferencias apagadas,
+una sola cuenta (no pregunta banco), "te pago por Pichincha", banco por nombre, detector de banco vs. dirección, contra entrega, variante,
 "quiero 2 licuadoras", consulta `KV-`, asesor/reclamo/garantía, opt-out, fuera de tema, "eres un bot?", sin "¿¡",
 "pagado", "ya transferí", foto de producto, ciudades ambiguas, sesión `@lid`, cédula/correo, cambio de datos en el
 resumen, `/brain`, voz con IA (no cambia ni inventa datos), extractor con IA (refs y precios inventados), Payphone.
