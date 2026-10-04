@@ -67,6 +67,21 @@ export async function adminSessions(req: Request, res: Response, next: NextFunct
   }
 }
 
+export async function adminConversation(req: Request, res: Response, next: NextFunction) {
+  try {
+    res
+      .status(200)
+      .json(
+        await botAdminService.getConversation(
+          req.params.phone,
+          req.query as Record<string, unknown>,
+        ),
+      );
+  } catch (error) {
+    next(error);
+  }
+}
+
 export async function adminReset(req: Request, res: Response, next: NextFunction) {
   try {
     res.status(200).json(await botAdminService.resetSession(req.params.phone));
