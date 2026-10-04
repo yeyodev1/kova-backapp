@@ -43,8 +43,44 @@ URL registrada en el token y el texto listo para mandarle a soporte.
 5. Cuando Dropi la habilite, en el panel toca **Probar de nuevo**: el estado pasa a "Conectado a Dropi" y el
    buscador e importador se activan sin más cambios.
 
-No se intenta saltar el bloqueo (nada de scraping ni de usar la sesión de la web de Dropi): la única vía es
-la lista blanca de la integración.
+No se intenta saltar el bloqueo: el servidor nunca le habla a Dropi fuera de la integración ni usa la sesión de
+la web de Dropi. Mientras tanto, la vía principal para traer productos es el botón de abajo.
+
+## Traer productos sin API: botón "Enviar a Kova"
+
+Un favorito (bookmarklet) que el dueño arrastra a su barra de favoritos desde **Importar de Dropi**. Él navega
+app.dropi.ec con su propia sesión, abre un producto o una página del catálogo y toca el favorito: se abre
+`/admin/dropi/traer` en Kova con lo que había en pantalla para elegir qué importar, ajustar margen e importarlo
+(`POST /api/admin/dropi/clip`), enlazado por su ID de Dropi.
+
+Límites (a propósito):
+
+- Solo **lee el DOM visible** de la página que el usuario ya tiene abierta, cuando él toca el botón, una página a la vez.
+- No pide ni guarda credenciales de Dropi, no llama a APIs internas de Dropi, no navega ni hace clics por su cuenta.
+- El servidor tampoco llama a Dropi: recibe los datos ya leídos y los valida como entrada no confiable.
+- Los datos viajan del navegador al panel con `postMessage`; el panel solo acepta mensajes de `https://*.dropi.ec`
+  y `https://*.dropi.co` (y `http://localhost:*` en desarrollo).
+
+Código: `kova-frontapp/src/utils/dropiClipper.ts` (bookmarklet y heurísticas), vista `AdminDropiClipView.vue`.
+
+Como no hay un contrato con el HTML de Dropi, las heurísticas son tolerantes:
+
+| Dato | Cómo se detecta |
+|---|---|
+| Tipo de página | Detalle si la URL tiene un id de 3+ dígitos y hay un `h1`/título; si no, listado por tarjetas |
+| Imágenes | `img` con `cloudfront.net`, `dropi`, `/storage` o `amazonaws` en el src, de 80 px o más, sin repetir |
+| Precios | Textos `$ 12,50`, `$12.50`, `12.50 USD`; la etiqueta cercana decide: "sugerido" → sugerido, "proveedor"/"costo"/"precio" → costo |
+| ID | Detalle: último número de 3+ dígitos de la URL. Tarjeta: número del `href` del enlace, o "ID: 12345" / "#12345" |
+| Título | `h1`/`h2` o clase con `name`/`title`/`nombre` |
+| Stock | `stock ... 20` o "20 unidades disponibles" |
+| Descripción | Bloque con más texto cuyo encabezado o clase menciona "descrip" (solo detalle) |
+
+Si cambia el HTML de Dropi y deja de detectar algo, el panel igual deja corregir título, ID, costo y sugerido a
+mano antes de importar. Para afinar: guardar el HTML real de una ficha y de un listado y ajustar los selectores
+en `dropiClipper.ts`.
+
+Al actualizar un producto ya enlazado, el clip refresca costo, sugerido, stock e imágenes (si no tenía), igual
+que la sincronización por API: no pisa precio, textos, ofertas ni publicado.
 
 ## Pedidos a mano (mientras la API esté bloqueada)
 
