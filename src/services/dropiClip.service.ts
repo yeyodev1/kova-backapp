@@ -5,6 +5,7 @@ import {
   createDraftProduct,
   markupOr,
   sanitizeDescription,
+  UNKNOWN_STOCK,
 } from "./dropiSync.service";
 
 /**
@@ -140,7 +141,7 @@ function toVariants(clip: ClipProduct, markup: number) {
       {
         dropiVariationId: v.dropiVariationId,
         name: v.name,
-        stock: v.stock ?? 0,
+        stock: v.stock ?? UNKNOWN_STOCK,
         // Sin costo propio, la variante hereda el del producto para no quedar a $0.
         costPrice: v.costPrice || clip.costPrice || 0,
         suggestedPrice: 0,
@@ -203,7 +204,7 @@ async function upsertClip(clip: ClipProduct, markup: number): Promise<ClipResult
       category: clip.category ?? "",
       costPrice: clip.costPrice ?? 0,
       suggestedPrice: clip.suggestedPrice ?? 0,
-      stock: clip.stock ?? 0,
+      stock: clip.stock ?? UNKNOWN_STOCK,
       variants: toVariants(clip, markup),
       price: clip.price,
     },
