@@ -19,6 +19,7 @@ export interface IBotEvent {
   reply: string;
   mediaUrl: string;
   orderNumber: string;
+  paymentLink: string;
   duplicated: boolean;
   error: string;
   durationMs: number;
@@ -38,6 +39,8 @@ const botEventSchema = new Schema<IBotEvent>(
     reply: { type: String, default: "" },
     mediaUrl: { type: String, default: "" },
     orderNumber: { type: String, default: "" },
+    // Link de pago con tarjeta que el bot mandó en ese turno (para el chat del panel).
+    paymentLink: { type: String, default: "" },
     duplicated: { type: Boolean, default: false },
     error: { type: String, default: "" },
     durationMs: { type: Number, default: 0 },
