@@ -11,6 +11,7 @@ export interface BotEventInput {
   reply?: string;
   mediaUrl?: string;
   orderNumber?: string;
+  paymentLink?: string;
   duplicated?: boolean;
   error?: string;
   durationMs?: number;
