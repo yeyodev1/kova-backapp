@@ -176,6 +176,8 @@ export type QuoteOutcome = { ok: true; quote: QuoteSummary } | { ok: false; mess
 
 export interface BankOption {
   bank: string;
+  /** Clave del catálogo de bancos: con ella se reconoce "te pago por Pichincha". */
+  bankCode?: string;
   type: string;
   number: string;
   holder: string;
