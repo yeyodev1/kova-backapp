@@ -20,6 +20,9 @@ export const ORDER_STATUSES = [
 ] as const;
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
+export const ORDER_CHANNELS = ["web", "whatsapp_bot"] as const;
+export type OrderChannel = (typeof ORDER_CHANNELS)[number];
+
 export interface IOrderItem {
   product: Types.ObjectId;
   variantId: string | null;
@@ -60,7 +63,17 @@ export interface IOrder {
   paymentMethod: PaymentMethod;
   paymentStatus: PaymentStatus;
   status: OrderStatus;
-  transfer: { receiptUrl: string; uploadedAt: Date | null; confirmedAt: Date | null };
+  /** Por dónde entró el pedido. */
+  channel: OrderChannel;
+  /** Token del link privado de pago (`/pagar/<token>`). Solo pedidos con tarjeta. */
+  payToken?: string;
+  transfer: {
+    receiptUrl: string;
+    uploadedAt: Date | null;
+    confirmedAt: Date | null;
+    /** Banco que eligió el cliente por WhatsApp (si hay varias cuentas). */
+    bank: string;
+  };
   dropi: {
     orderId: number | null;
     status: string;
@@ -71,7 +84,14 @@ export interface IOrder {
     /** Candado para no crear dos veces el mismo pedido en Dropi. */
     lockedAt: Date | null;
   };
-  payphone: { clientTransactionId: string; transactionId: string; response: unknown };
+  payphone: {
+    /** Intento vigente. */
+    clientTransactionId: string;
+    /** Todos los intentos (cada apertura del link de pago crea uno). */
+    clientTransactionIds: string[];
+    transactionId: string;
+    response: unknown;
+  };
   utm: Record<string, string>;
   notes: string;
   /** true cuando ya se descontó stock y se sumó soldCount. */
@@ -130,12 +150,16 @@ const orderSchema = new Schema<IOrder>(
     surcharge: { type: Number, default: 0 },
     total: { type: Number, default: 0 },
     paymentMethod: { type: String, enum: PAYMENT_METHODS, required: true },
+    channel: { type: String, enum: ORDER_CHANNELS, default: "web" },
+    // Sin default: el índice sparse ignora los pedidos sin link de pago.
+    payToken: { type: String },
     paymentStatus: { type: String, enum: PAYMENT_STATUSES, default: "pending" },
     status: { type: String, enum: ORDER_STATUSES, default: "pending_payment", index: true },
     transfer: {
       receiptUrl: { type: String, default: "" },
       uploadedAt: { type: Date, default: null },
       confirmedAt: { type: Date, default: null },
+      bank: { type: String, default: "" },
     },
     dropi: {
       orderId: { type: Number, default: null },
@@ -148,6 +172,7 @@ const orderSchema = new Schema<IOrder>(
     },
     payphone: {
       clientTransactionId: { type: String, default: "" },
+      clientTransactionIds: { type: [String], default: [] },
       transactionId: { type: String, default: "" },
       response: { type: Schema.Types.Mixed, default: null },
     },
@@ -161,6 +186,8 @@ const orderSchema = new Schema<IOrder>(
 
 orderSchema.index({ createdAt: -1 });
 orderSchema.index({ "payphone.clientTransactionId": 1 });
+orderSchema.index({ "payphone.clientTransactionIds": 1 });
+orderSchema.index({ payToken: 1 }, { unique: true, sparse: true });
 orderSchema.index({ "dropi.orderId": 1 });
 
 export const Order = mongoose.models.Order || mongoose.model<IOrder>("Order", orderSchema);
