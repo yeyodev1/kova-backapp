@@ -1,10 +1,17 @@
+import crypto from "crypto";
 import { isValidObjectId } from "mongoose";
 import { env } from "../config/env";
 import { CustomError } from "../errors/customError.error";
 import { nextOrderNumber } from "../models/counter.model";
 import { markLeadConverted } from "../models/lead.model";
 import { Location } from "../models/location.model";
-import { Order, OrderStatus, toPublicOrder } from "../models/order.model";
+import {
+  ORDER_CHANNELS,
+  Order,
+  OrderChannel,
+  OrderStatus,
+  toPublicOrder,
+} from "../models/order.model";
 import { Product } from "../models/product.model";
 import { getSettings } from "../models/setting.model";
 import { normalizeEcPhone } from "../utils/phone";
@@ -158,7 +165,27 @@ async function trySendToDropi(orderId: unknown) {
 
 // ── Crear pedido ────────────────────────────────────────────────────────────
 
-export async function createOrder(input: any) {
+/** Único por intento y ≤ 50 caracteres, como exige Payphone. */
+function newClientTransactionId(number: string): string {
+  return `${number}-${Date.now().toString(36)}${crypto.randomBytes(2).toString("hex")}`.slice(
+    0,
+    50,
+  );
+}
+
+/** Token del link privado de pago: 24 caracteres URL-safe, imposible de adivinar. */
+function newPayToken(): string {
+  return crypto.randomBytes(18).toString("base64url");
+}
+
+export interface CreateOrderOptions {
+  /** Lo pone el servidor (el bot), nunca el body del cliente. */
+  channel?: OrderChannel;
+  /** Banco que eligió el cliente para transferir. */
+  transferBank?: string;
+}
+
+export async function createOrder(input: any, options: CreateOrderOptions = {}) {
   const paymentMethod = parsePaymentMethod(input?.paymentMethod);
   const customer = parseCustomer(input?.customer);
   const address = await parseAddress(input?.address);
@@ -180,6 +207,7 @@ export async function createOrder(input: any) {
     paymentMethod,
     notes: text(input?.notes, 500),
     utm: parseUtm(input?.utm),
+    channel: ORDER_CHANNELS.includes(options.channel as OrderChannel) ? options.channel : "web",
   };
 
   let order: any;
@@ -195,16 +223,22 @@ export async function createOrder(input: any) {
       ...base,
       status: "awaiting_transfer",
       paymentStatus: "pending",
+      transfer: { bank: text(options.transferBank, 80) },
       history: [historyEntry("awaiting_transfer", "Esperando comprobante de transferencia")],
     });
   } else {
-    // Único por intento y ≤ 50 caracteres, como exige Payphone.
-    const clientTransactionId = `${number}-${Date.now().toString(36)}`.slice(0, 50);
+    const clientTransactionId = newClientTransactionId(number);
     order = await Order.create({
       ...base,
       status: "pending_payment",
       paymentStatus: "pending",
-      payphone: { clientTransactionId, transactionId: "", response: null },
+      payToken: newPayToken(),
+      payphone: {
+        clientTransactionId,
+        clientTransactionIds: [clientTransactionId],
+        transactionId: "",
+        response: null,
+      },
       history: [historyEntry("pending_payment", "Esperando pago con tarjeta")],
     });
   }
@@ -226,26 +260,7 @@ export async function createOrder(input: any) {
   const response: Record<string, unknown> = { order: toPublicOrder(order) };
 
   if (payphoneConfig) {
-    response.payphone = {
-      token: payphoneConfig.token,
-      storeId: payphoneConfig.storeId,
-      clientTransactionId: order.payphone.clientTransactionId,
-      amount: order.total,
-      amountWithoutTax: order.total,
-      currency: "USD",
-      reference: `Pedido ${order.number} Kova`,
-      email: customer.email,
-      phoneNumber: `+593${customer.phone.slice(1)}`,
-      // Payphone pide el desglose aunque no se cobre IVA aparte:
-      // amount = amountWithoutTax + amountWithTax + tax + service + tip.
-      amountWithTax: 0,
-      tax: 0,
-      service: 0,
-      tip: 0,
-      // Datos reales del comprador: con cédula o RUC Payphone valida mejor y bloquea menos.
-      ...payphoneDocument(customer.idNumber),
-      optionalParameter: order.number,
-    };
+    response.payphone = payphonePayload(order, payphoneConfig);
   }
 
   if (paymentMethod === "transfer") {
@@ -257,6 +272,78 @@ export async function createOrder(input: any) {
 }
 
 // ── Payphone ────────────────────────────────────────────────────────────────
+
+/** Lo que pide la Cajita de Pagos para el intento vigente del pedido. */
+function payphonePayload(order: any, config: { token: string; storeId: string }) {
+  return {
+    token: config.token,
+    storeId: config.storeId,
+    clientTransactionId: order.payphone.clientTransactionId,
+    amount: order.total,
+    amountWithoutTax: order.total,
+    currency: "USD",
+    reference: `Pedido ${order.number} Kova`,
+    email: order.customer.email,
+    phoneNumber: `+593${String(order.customer.phone).slice(1)}`,
+    // Payphone pide el desglose aunque no se cobre IVA aparte:
+    // amount = amountWithoutTax + amountWithTax + tax + service + tip.
+    amountWithTax: 0,
+    tax: 0,
+    service: 0,
+    tip: 0,
+    // Datos reales del comprador: con cédula o RUC Payphone valida mejor y bloquea menos.
+    ...payphoneDocument(order.customer.idNumber),
+    optionalParameter: order.number,
+  };
+}
+
+/**
+ * GET /orders/pay/:token — link privado de pago (lo manda el bot de WhatsApp).
+ * Cada apertura de un pedido sin pagar crea un intento nuevo: Payphone no deja
+ * reusar un clientTransactionId y el cliente puede abrir el link varias veces.
+ */
+export async function getPayOrder(token: unknown) {
+  const payToken = text(token, 64);
+  if (!/^[\w-]{24,64}$/.test(payToken)) throw new CustomError("Link de pago no válido", 404);
+  const order: any = await Order.findOne({ payToken });
+  if (!order) throw new CustomError("Link de pago no válido", 404);
+
+  if (order.paymentStatus === "paid") return { order: toPublicOrder(order), paid: true };
+  if (order.paymentMethod !== "card") {
+    throw new CustomError("Este pedido no se paga con tarjeta", 409);
+  }
+  if (!["pending_payment", "failed"].includes(order.status)) {
+    throw new CustomError(
+      order.status === "cancelled"
+        ? "Este pedido fue cancelado. Escríbenos por WhatsApp si quieres hacerlo de nuevo"
+        : "Este pedido ya no recibe pagos",
+      409,
+    );
+  }
+
+  const config = payphoneService.getPayphoneConfig();
+  const clientTransactionId = newClientTransactionId(order.number);
+  const update: Record<string, any> = {
+    $set: { "payphone.clientTransactionId": clientTransactionId },
+    $push: { "payphone.clientTransactionIds": clientTransactionId },
+  };
+  // Un intento rechazado no cierra el pedido: el cliente puede probar con otra tarjeta.
+  if (order.status === "failed") {
+    update.$set.status = "pending_payment";
+    update.$set.paymentStatus = "pending";
+    update.$push.history = historyEntry("pending_payment", "Nuevo intento de pago con tarjeta");
+  }
+  const updated = await Order.findOneAndUpdate(
+    { _id: order._id, paymentStatus: { $ne: "paid" } },
+    update,
+    { new: true },
+  );
+  if (!updated) {
+    const fresh = await Order.findById(order._id);
+    return { order: toPublicOrder(fresh), paid: true };
+  }
+  return { order: toPublicOrder(updated), paid: false, payphone: payphonePayload(updated, config) };
+}
 
 /** 10 dígitos = cédula (1), 13 = RUC (2). Otro formato no se manda para no forzar un tipo falso. */
 function payphoneDocument(idNumber: string) {
@@ -270,7 +357,10 @@ export async function confirmPayphone(id: unknown, clientTransactionId: unknown)
   const payphoneId = Number(id);
   if (!txId || !payphoneId) throw new CustomError("Faltan los datos de la transacción", 400);
 
-  const order = await Order.findOne({ "payphone.clientTransactionId": txId });
+  // Cualquier intento del historial: el cliente pudo pagar con un link viejo.
+  const order = await Order.findOne({
+    $or: [{ "payphone.clientTransactionId": txId }, { "payphone.clientTransactionIds": txId }],
+  });
   if (!order) throw new CustomError("Pedido no encontrado", 404);
 
   // Idempotente: el cliente recarga la página de respuesta más de una vez.
@@ -290,6 +380,7 @@ export async function confirmPayphone(id: unknown, clientTransactionId: unknown)
         $set: {
           paymentStatus: "paid",
           status: "confirmed",
+          "payphone.clientTransactionId": txId,
           "payphone.transactionId": String(payphoneId),
           "payphone.response": data,
         },
@@ -331,6 +422,47 @@ export async function confirmPayphone(id: unknown, clientTransactionId: unknown)
   return { order: toPublicOrder(order), approved: false };
 }
 
+export type CardSettlement =
+  "already_paid" | "paid_now" | "pending" | "rejected" | "review" | "not_applicable" | "error";
+
+/**
+ * El cliente dice "ya pagué" por WhatsApp: se pregunta a Payphone por cada
+ * intento (del más nuevo al más viejo) y, si uno está aprobado, se hace la
+ * confirmación obligatoria con `confirmPayphone` (idempotente). "Pendiente" o
+ * "no encontrada" no tocan el pedido: el cliente pudo no haber pagado aún.
+ */
+export async function settleCardPayment(orderId: string): Promise<CardSettlement> {
+  const order: any = isValidObjectId(orderId) ? await Order.findById(orderId).lean() : null;
+  if (!order || order.paymentMethod !== "card") return "not_applicable";
+  if (order.paymentStatus === "paid") return "already_paid";
+  if (order.status === "cancelled") return "not_applicable";
+
+  const attempts = [
+    ...new Set(
+      [
+        order.payphone?.clientTransactionId,
+        ...[...(order.payphone?.clientTransactionIds || [])].reverse(),
+      ].filter(Boolean),
+    ),
+  ] as string[];
+  let rejected = false;
+  for (const txId of attempts) {
+    const sale = await payphoneService.getSale(txId);
+    const decision = payphoneService.decideFromSale(sale);
+    if (decision === "rejected") rejected = true;
+    if (decision !== "confirm") continue;
+    try {
+      const result = await confirmPayphone(sale.transactionId, txId);
+      // Aprobado en la consulta y no en la confirmación (monto distinto): lo revisa una persona.
+      return result.approved ? "paid_now" : "review";
+    } catch (error: any) {
+      console.error(`[orders] no se pudo confirmar ${txId}:`, error?.message);
+      return "error";
+    }
+  }
+  return rejected ? "rejected" : "pending";
+}
+
 // ── Transferencia ───────────────────────────────────────────────────────────
 
 export async function uploadReceipt(number: unknown, phone: unknown, file?: Express.Multer.File) {
@@ -347,17 +479,33 @@ export async function uploadReceipt(number: unknown, phone: unknown, file?: Expr
     throw new CustomError("Este pedido ya no recibe comprobantes", 400);
   }
   if (!file) throw new CustomError("Adjunta el comprobante", 400);
-  if (!RECEIPT_TYPES.includes(file.mimetype)) {
+  const updated = await attachReceipt(
+    order,
+    file.buffer,
+    file.mimetype,
+    "Comprobante subido por el cliente",
+  );
+  return toPublicOrder(updated);
+}
+
+export const isReceiptType = (mimeType: string) => RECEIPT_TYPES.includes(mimeType);
+
+/**
+ * Guarda un comprobante en un pedido por transferencia (web o WhatsApp): lo
+ * sube a Cloudinary y deja el pedido en `transfer_review`. Nadie lo aprueba
+ * aquí: lo confirma una persona desde el panel.
+ */
+export async function attachReceipt(order: any, buffer: Buffer, mimeType: string, note: string) {
+  if (!isReceiptType(mimeType)) {
     throw new CustomError("El comprobante debe ser una imagen o un PDF", 400);
   }
-
-  const { url } = await uploadFile(file.buffer, "kova/receipts");
+  const { url } = await uploadFile(buffer, "kova/receipts");
   order.transfer.receiptUrl = url;
   order.transfer.uploadedAt = new Date();
   order.status = "transfer_review";
-  order.history.push(historyEntry("transfer_review", "Comprobante subido por el cliente"));
+  order.history.push(historyEntry("transfer_review", text(note, 500)));
   await order.save();
-  return toPublicOrder(order);
+  return order;
 }
 
 export async function confirmTransfer(id: string) {
