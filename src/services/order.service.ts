@@ -13,13 +13,14 @@ import {
   toPublicOrder,
 } from "../models/order.model";
 import { Product } from "../models/product.model";
-import { getSettings } from "../models/setting.model";
+import { getSettings, transfersEnabled } from "../models/setting.model";
 import { normalizeEcPhone } from "../utils/phone";
-import { buildQuote, parsePaymentMethod } from "./checkout.service";
+import { buildQuote, parsePaymentMethod, TRANSFERS_OFF } from "./checkout.service";
 import { uploadFile } from "./cloudinary.service";
 import * as dropiService from "./dropi.service";
 import { notifyOrder } from "./orderNotifications.service";
 import * as payphoneService from "./payphone.service";
+import { accountsForOrder, resolveTransferAccount } from "./payments.service";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 /** Si un envío a Dropi quedó colgado, el candado expira y se puede reintentar. */
@@ -181,12 +182,18 @@ function newPayToken(): string {
 export interface CreateOrderOptions {
   /** Lo pone el servidor (el bot), nunca el body del cliente. */
   channel?: OrderChannel;
-  /** Banco que eligió el cliente para transferir. */
+  /** Banco que eligió el cliente para transferir (nombre o _id de la cuenta). */
   transferBank?: string;
 }
 
 export async function createOrder(input: any, options: CreateOrderOptions = {}) {
   const paymentMethod = parsePaymentMethod(input?.paymentMethod);
+  // El panel puede apagar las transferencias: se revisa antes de validar lo demás.
+  const settings = paymentMethod === "transfer" ? await getSettings() : null;
+  if (settings && !transfersEnabled(settings)) throw new CustomError(TRANSFERS_OFF, 400);
+  const transferAccount = settings
+    ? resolveTransferAccount(settings, options.transferBank ?? input?.transferBank)
+    : null;
   const customer = parseCustomer(input?.customer);
   const address = await parseAddress(input?.address);
   const quote = await buildQuote(input?.items, paymentMethod);
@@ -223,7 +230,7 @@ export async function createOrder(input: any, options: CreateOrderOptions = {}) 
       ...base,
       status: "awaiting_transfer",
       paymentStatus: "pending",
-      transfer: { bank: text(options.transferBank, 80) },
+      transfer: { bank: transferAccount?.bank || "" },
       history: [historyEntry("awaiting_transfer", "Esperando comprobante de transferencia")],
     });
   } else {
@@ -262,10 +269,8 @@ export async function createOrder(input: any, options: CreateOrderOptions = {}) 
     response.payphone = payphonePayload(order, payphoneConfig);
   }
 
-  if (paymentMethod === "transfer") {
-    const settings = await getSettings();
-    response.bankAccounts = settings.bankAccounts || [];
-  }
+  // Solo cuentas activas; si eligió banco, solo esa.
+  if (settings) response.bankAccounts = accountsForOrder(settings, order.transfer?.bank || "");
 
   return response;
 }
@@ -719,9 +724,15 @@ export async function track(number: unknown, phone: unknown) {
     customer: { firstName: order.customer.firstName },
     address: { province: order.address.province, city: order.address.city },
     transfer: {
+      bank: order.transfer?.bank || "",
       uploadedAt: order.transfer?.uploadedAt ?? null,
       confirmedAt: order.transfer?.confirmedAt ?? null,
     },
+    // Pedido que aún se paga por transferencia: sus cuentas, aunque luego se apaguen.
+    bankAccounts:
+      order.paymentMethod === "transfer" && order.status === "awaiting_transfer"
+        ? accountsForOrder(await getSettings(), order.transfer?.bank || "")
+        : [],
     guide: order.dropi?.guide || "",
     carrier: order.dropi?.carrier || "",
     dropi: {
