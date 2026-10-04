@@ -150,15 +150,22 @@ Reglas de `POST /orders`:
 | POST | `/admin/dropi/sync-locations` | descarga provincias y ciudades de Dropi a Mongo |
 | POST | `/admin/dropi/sync-orders` | refresca estado/guía de órdenes `sent_to_dropi`/`shipped` |
 | GET | `/admin/products` | `?q&page&published` → `Paginated<Product>` (con campos admin) |
-| GET/PUT/DELETE | `/admin/products/:id` | editar precio, ofertas, textos, beneficios, FAQs, publicar, destacar |
+| POST | `/admin/products` | crear producto manual (201). `title` obligatorio; opcionales `slug, shortDescription, description, category, images, price, compareAtPrice, costPrice, dropiId`. Slug único, `isPublished:false`, ofertas 1/2/3 u si hay precio |
+| GET/PUT/DELETE | `/admin/products/:id` | editar precio, ofertas, textos, beneficios, FAQs, publicar, destacar. Enlace con Dropi: `dropiId` (entero o `null` para desenlazar; 409 si otro producto ya lo usa), `costPrice` (centavos) y por variante `variants[].dropiVariationId` / `variants[].costPrice` |
 | POST | `/admin/products/:id/images` | multipart `image` → Cloudinary, agrega a `images` |
 | GET | `/admin/orders` | `?status&paymentMethod&q&page` → `Paginated<Order>` |
 | GET | `/admin/orders/:id` | `Order` |
 | POST | `/admin/orders/:id/confirm-transfer` | marca pagado y crea en Dropi |
-| POST | `/admin/orders/:id/send-to-dropi` | reintento manual |
+| POST | `/admin/orders/:id/send-to-dropi` | reintento manual. Completa `dropiId`/`dropiVariationId` de los items con los del producto actual (productos enlazados después de la compra); 400 si alguno sigue sin enlazar |
 | POST | `/admin/orders/:id/cancel` | cancela (y en Dropi si ya existe) |
 | GET | `/admin/leads` | `Paginated<Lead>` carritos abandonados (no convertidos) |
 | GET/PUT | `/admin/settings` | `Settings` completo |
+
+### Productos manuales y enlace con Dropi
+
+Mientras la API de Dropi no esté habilitada, el panel crea productos a mano y guarda su **ID de Dropi**
+(el de la ficha del producto en Dropi). Con ese ID el producto entra en `sync-products` (stock y costo) y
+sus pedidos se crean en Dropi como los de un producto importado.
 
 ## Cron (Vercel, `Bearer CRON_SECRET`)
 
