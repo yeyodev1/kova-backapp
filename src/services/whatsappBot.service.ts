@@ -1,7 +1,10 @@
 import crypto from "crypto";
 import { env } from "../config/env";
+import { Order } from "../models/order.model";
 import { WhatsappSession } from "../models/whatsappSession.model";
-import { geminiEnabled } from "./gemini.service";
+import { normalizeEcPhone } from "../utils/phone";
+import { geminiEnabled, geminiHealth } from "./gemini.service";
+import { reportIncident } from "./incidents.service";
 import { notifyHumanRequest } from "./teamAlerts.service";
 import { logBotEvent } from "./whatsappBot/activity";
 import { catalogOverview } from "./whatsappBot/catalog";
@@ -14,7 +17,7 @@ import {
   readMessage,
   readPhone,
 } from "./whatsappBot/input";
-import { claimsPaid } from "./whatsappBot/intents";
+import { claimsPaid, orderNumberIn } from "./whatsappBot/intents";
 import { handleTurn } from "./whatsappBot/router";
 import { ASK_PRODUCT, casualMarks } from "./whatsappBot/texts";
 import { BotState, TurnResult, createInitialState } from "./whatsappBot/types";
@@ -163,6 +166,47 @@ export async function decide(body: any) {
     durationMs: Date.now() - startedAt,
   });
   return { ...emptyResponse(route, reason, ""), step, targetEndpoint: FLOW_PATHS[route] };
+}
+
+// ─── Incidencias del bot ─────────────────────────────────────────────────────
+
+/** Fallos seguidos de Gemini a partir de los cuales se abre una incidencia. */
+const GEMINI_FAILURES_ALERT = 3;
+
+/** El pedido del que habla el cliente (KV- del mensaje) o el último de su teléfono. */
+async function orderForChat(phone: string, message: string) {
+  const normalized = normalizeEcPhone(phone);
+  if (!normalized) return null;
+  const number = orderNumberIn(message);
+  const filter: Record<string, unknown> = { "customer.phone": normalized };
+  const pick = (extra: Record<string, unknown>) =>
+    Order.findOne({ ...filter, ...extra })
+      .sort({ createdAt: -1 })
+      .select("number customer")
+      .lean<any>();
+  return (number && (await pick({ number }))) || pick({});
+}
+
+/** Reclamo o pedido de asesor: queda en la bandeja de incidencias además del correo. */
+async function reportHumanIncident(
+  phone: string,
+  name: string,
+  message: string,
+  complaint: boolean,
+) {
+  const order = await orderForChat(phone, message).catch(() => null);
+  await reportIncident({
+    type: complaint ? "customer_complaint" : "human_request",
+    severity: complaint ? "high" : "medium",
+    title: complaint
+      ? "Reclamo de un cliente por WhatsApp"
+      : "Un cliente pide hablar con un asesor",
+    detail: `El cliente escribió: "${message.slice(0, 1500)}"`,
+    order,
+    phone,
+    customerName: name,
+    source: "bot",
+  });
 }
 
 // ─── Turno completo ──────────────────────────────────────────────────────────
@@ -358,12 +402,21 @@ export async function turn(body: any, endpoint: string) {
         reply: result.reply,
         mediaUrl,
       });
-      // Sin await: el correo al equipo no debe demorar la respuesta al cliente.
-      void notifyHumanRequest({
-        phone,
-        name: `${result.state.firstName || ""} ${result.state.lastName || ""}`.trim(),
-        message,
-        reply: result.reply,
+      const name = `${result.state.firstName || ""} ${result.state.lastName || ""}`.trim();
+      // Sin await: el correo y la incidencia no deben demorar la respuesta al cliente.
+      void notifyHumanRequest({ phone, name, message, reply: result.reply });
+      // Un pago "por revisar" ya abrió su incidencia de pago desde Payphone.
+      if (!result.decision.startsWith("R3:"))
+        void reportHumanIncident(phone, name, message, result.decision.startsWith("R2:reclamo"));
+    }
+    if (geminiEnabled() && geminiHealth().failures >= GEMINI_FAILURES_ALERT) {
+      void reportIncident({
+        type: "bot_error",
+        severity: "medium",
+        title: "La IA del bot (Gemini) está fallando seguido",
+        detail: `${geminiHealth().failures} fallos seguidos. Último error: ${geminiHealth().lastError}. El bot sigue respondiendo con reglas, pero entiende menos: revisa la llave y la cuota de Gemini.`,
+        key: "gemini",
+        source: "bot",
       });
     }
     console.log(
@@ -394,6 +447,14 @@ export async function turn(body: any, endpoint: string) {
       message,
       error: error?.message || String(error),
       durationMs: Date.now() - startedAt,
+    });
+    void reportIncident({
+      type: "bot_error",
+      severity: "medium",
+      title: "El bot falló al responder un mensaje",
+      detail: `Error: ${error?.message || String(error)}\nEl cliente escribió: "${message.slice(0, 500)}"`,
+      phone,
+      source: "bot",
     });
     return errorResponse();
   }
