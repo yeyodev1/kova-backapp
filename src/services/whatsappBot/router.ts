@@ -24,6 +24,7 @@ import {
   detectPaymentMethod,
   extractChoice,
   extractQuantity,
+  isComplaint,
   isGreeting,
   isNo,
   isYes,
@@ -85,6 +86,35 @@ const resetOrder = (state: BotState) =>
     stage: "idle",
   });
 
+/**
+ * La consulta de un pedido no corta la compra en curso: después del estado del pedido
+ * se repite la pregunta pendiente (producto, variante, cantidad, datos o resumen).
+ */
+async function resumePurchase(state: BotState, deps: BotDeps, result: TurnResult) {
+  const keep = (next: TurnResult): TurnResult => ({
+    ...next,
+    route: result.route,
+    intent: result.intent,
+    orderNumber: result.orderNumber,
+    paymentLink: result.paymentLink,
+  });
+  const prefix = `${result.reply}\n\nY seguimos con tu compra 🛒`;
+  if (state.stage === "choosing" && state.options.length) {
+    return keep(
+      reply(
+        state,
+        `${prefix} Respóndeme con el número del producto que te interesa.`,
+        result.decision,
+      ),
+    );
+  }
+  if ((state.stage === "variant" || state.stage === "quantity") && state.pending)
+    return keep(await continuePending(state, deps, result.decision, prefix));
+  if (state.cart.length && (DATA_STAGES.includes(state.stage) || state.stage === "confirm"))
+    return keep(await askNext(state, deps, result.decision, prefix));
+  return result;
+}
+
 // ─── Turno ───────────────────────────────────────────────────────────────────
 
 export async function handleTurn(
@@ -95,6 +125,9 @@ export async function handleTurn(
   const state: BotState = JSON.parse(JSON.stringify({ ...createInitialState(), ...previous }));
   if (!state.phone && deps.whatsappPhone) state.phone = deps.whatsappPhone;
   const message = input.message.trim();
+  // La lista de pedidos para elegir vale solo para la respuesta siguiente.
+  const orderChoices = state.orderChoices || [];
+  state.orderChoices = [];
 
   // R1: comprobante, foto de producto, video o audio.
   if (input.mediaUrl) return handleMedia(state, input.mediaUrl, deps);
@@ -128,7 +161,18 @@ export async function handleTurn(
     );
   }
 
-  // R2: pedir una persona (reclamo, garantía, devolución).
+  // R2: reclamo (garantía, devolución, producto dañado): a una persona y queda como incidencia.
+  if (isComplaint(message)) {
+    const contact = deps.supportPhone ? ` También puedes escribir al ${deps.supportPhone}.` : "";
+    return reply(
+      state,
+      `Siento mucho el inconveniente 🙏 Ya le pasé tu caso a una persona del equipo de Kova y te escribe por aquí en un ratito para ayudarte 💙${contact}`,
+      "R2:reclamo",
+      { intent: "dudas", route: "human" },
+    );
+  }
+
+  // R2: pedir una persona.
   if (wantsHuman(message)) {
     const contact = deps.supportPhone
       ? ` También puedes escribir directo al ${deps.supportPhone}.`
@@ -166,9 +210,22 @@ export async function handleTurn(
       },
     );
   }
-  // R3: estado de pedidos ("mi pedido", "KV-1001").
-  if (wantsTracking(message) || orderNumberIn(message) || claimsTransfer(message))
-    return handleOrders(state, message, deps);
+  // R3: respuesta a "cuál pedido?" ("el 2", "KV-1003").
+  if (orderChoices.length) {
+    const choice = extractChoice(message, orderChoices.length);
+    const typed = orderNumberIn(message);
+    const picked = choice ? orderChoices[choice - 1] : typed;
+    if (picked) {
+      const shown = await handleOrders(state, message, deps, { picked });
+      if (shown) return resumePurchase(state, deps, shown);
+    }
+  }
+  // R3: estado de pedidos ("mi pedido", "KV-1001", "dónde está mi paquete"), desde
+  // cualquier paso: siempre en vivo desde la base y luego se retoma la compra.
+  if (wantsTracking(message) || orderNumberIn(message) || claimsTransfer(message)) {
+    const shown = await handleOrders(state, message, deps, { force: claimsTransfer(message) });
+    if (shown) return resumePurchase(state, deps, shown);
+  }
 
   // R4: vaciar el carrito (antes de crear el pedido).
   if (wantsCancel(message) && state.stage !== "ordered" && (state.cart.length || state.pending)) {
