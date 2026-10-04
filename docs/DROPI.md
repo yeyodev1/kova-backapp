@@ -63,21 +63,47 @@ Límites (a propósito):
 
 Código: `kova-frontapp/src/utils/dropiClipper.ts` (bookmarklet y heurísticas), vista `AdminDropiClipView.vue`.
 
-Como no hay un contrato con el HTML de Dropi, las heurísticas son tolerantes:
+### Catálogo (`/dashboard/search`): selectores reales
+
+Tomados del HTML guardado del catálogo (Angular, 78 tarjetas) el 2026-10-03:
+
+| Dato | Selector |
+|---|---|
+| Tarjeta e **ID de Dropi** | `app-card-product[data-cy^="catalog-product-card-"]`; el id es el número de `data-cy="catalog-product-card-139710"` (fuente principal y confiable) |
+| Imagen | `img.card-image__img` (`currentSrc \|\| src`), ignorando `.error-img` (placeholder `no-image.jpg`). En vivo viene de los CDN `d39ru7awumhhs2` / `d1s927u3m6o0kl` / `d9kz1bfy19fz0.cloudfront.net` |
+| Título | `h3.tittle-product` (así, con doble t) |
+| Categoría | primer `div` con texto dentro de `.category-stock` (ej. "Hogar") |
+| Proveedor | `.provider-name` (solo se muestra en el panel) |
+| Precio proveedor, sugerido y stock | **no están en el DOM**: Dropi los dibuja en `<canvas>` (`.price-provider canvas`, `.price-suggested canvas`, `.stock-container canvas`) |
+
+**Decisión sobre los precios en canvas:** Dropi los dibuja como imagen a propósito para que no se copien.
+No se leen de ninguna forma (ni pixeles, ni OCR, ni `toDataURL`): sería saltarse una protección deliberada.
+En `/admin/dropi/traer` el dueño escribe el **costo del proveedor** que ve en pantalla (y, si quiere, el sugerido
+y el stock). Con costo, el precio de venta se calcula con el margen; sin costo puede escribir el precio de venta
+directo (`price` en el body). Si no pone ninguno, el producto entra como borrador **sin precio** (precio 0, sin
+ofertas) y el resultado lo avisa; no se inventa un precio.
+
+El clipper toma solo las tarjetas que están en el DOM en ese momento: Dropi carga más al bajar, así que hay que
+bajar antes de tocar el favorito. Se envían hasta 60 por vez.
+
+### Detalle y otras páginas: heurística genérica
+
+Todavía no tenemos el HTML real de la ficha de producto. Mientras tanto:
 
 | Dato | Cómo se detecta |
 |---|---|
-| Tipo de página | Detalle si la URL tiene un id de 3+ dígitos y hay un `h1`/título; si no, listado por tarjetas |
-| Imágenes | `img` con `cloudfront.net`, `dropi`, `/storage` o `amazonaws` en el src, de 80 px o más, sin repetir |
-| Precios | Textos `$ 12,50`, `$12.50`, `12.50 USD`; la etiqueta cercana decide: "sugerido" → sugerido, "proveedor"/"costo"/"precio" → costo |
-| ID | Detalle: último número de 3+ dígitos de la URL. Tarjeta: número del `href` del enlace, o "ID: 12345" / "#12345" |
-| Título | `h1`/`h2` o clase con `name`/`title`/`nombre` |
-| Stock | `stock ... 20` o "20 unidades disponibles" |
-| Descripción | Bloque con más texto cuyo encabezado o clase menciona "descrip" (solo detalle) |
+| Tipo de página | Detalle si la URL tiene un id de 3+ dígitos (`/product-details/12345`) |
+| ID | último número de 3+ dígitos de la URL; en tarjetas sin `data-cy`, el del `href` o un texto "ID: 12345" / "#12345" |
+| Imágenes | `img` con `cloudfront.net`, `dropi`, `/storage` o `amazonaws` en el src, de 80 px o más, sin logos ni íconos, sin repetir; se excluyen las de productos relacionados |
+| Precios | solo si están como **texto**: `$ 12,50`, `$12.50`, `12.50 USD`; la etiqueta anterior decide ("sugerido" → sugerido; "proveedor"/"costo"/"precio" → costo; "saldo"/"cartera"/"envío" se ignoran) |
+| Título | `h1`, o clase con `name`/`title`/`nombre`, o el texto más grande |
+| Stock | `stock ... 20` o "20 unidades disponibles" (solo texto) |
+| Descripción | bloque con más texto cuyo encabezado o clase menciona "descrip"; el backend lo sanea |
 
-Si cambia el HTML de Dropi y deja de detectar algo, el panel igual deja corregir título, ID, costo y sugerido a
-mano antes de importar. Para afinar: guardar el HTML real de una ficha y de un listado y ajustar los selectores
-en `dropiClipper.ts`.
+Lo que no se detecte se corrige a mano en el panel (título, ID, costo, sugerido, stock). Para afinar la ficha:
+guardar su HTML real ("Guardar página como…") y ajustar `dropiClipper.ts` igual que con el catálogo.
+
+Nunca se manda nada de la sesión de Dropi (cookies, localStorage, tokens): solo los campos del producto.
 
 Al actualizar un producto ya enlazado, el clip refresca costo, sugerido, stock e imágenes (si no tenía), igual
 que la sincronización por API: no pisa precio, textos, ofertas ni publicado.
