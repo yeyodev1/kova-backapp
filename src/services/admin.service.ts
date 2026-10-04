@@ -19,19 +19,21 @@ const NOT_SALES = ["pending_payment", "failed", "cancelled"];
 /** Un pedido creado en Dropi sin guía después de esto ya hay que reclamarlo. */
 const GUIDE_WAIT_MS = 48 * 60 * 60 * 1000;
 
-export type OrderTodo = "dropi" | "receipt" | "guide";
+export type OrderTodo = "dropi" | "receipt" | "guide" | "payment";
 
 /**
  * "Por gestionar": pedidos que esperan una acción del equipo.
  * - confirmado sin pedido en Dropi → pasarlo a Dropi
  * - comprobante subido → revisarlo
  * - en Dropi sin guía hace más de 48 h → pedir la guía
+ * - esperando transferencia o pago con tarjeta → seguimiento al cliente (que nada quede escondido)
  */
 function todoFilter(now = Date.now()) {
   return {
     $or: [
       { status: "confirmed", "dropi.orderId": null },
       { status: "transfer_review" },
+      { status: { $in: ["awaiting_transfer", "pending_payment"] } },
       {
         status: "sent_to_dropi",
         "dropi.guide": { $in: ["", null] },
@@ -47,6 +49,7 @@ function todoFilter(now = Date.now()) {
 function orderTodo(order: any, now = Date.now()): OrderTodo | null {
   if (order.status === "confirmed" && !order.dropi?.orderId) return "dropi";
   if (order.status === "transfer_review") return "receipt";
+  if (order.status === "awaiting_transfer" || order.status === "pending_payment") return "payment";
   if (order.status === "sent_to_dropi" && !order.dropi?.guide) {
     const sentAt = (order.history || []).find((h: any) => h.status === "sent_to_dropi")?.at;
     if (sentAt && new Date(sentAt).getTime() < now - GUIDE_WAIT_MS) return "guide";
