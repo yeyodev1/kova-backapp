@@ -160,8 +160,26 @@ Reglas de `POST /orders`:
 | POST | `/admin/orders/:id/confirm-transfer` | marca pagado y crea en Dropi |
 | POST | `/admin/orders/:id/send-to-dropi` | reintento manual. Completa `dropiId`/`dropiVariationId` de los items con los del producto actual (productos enlazados después de la compra); 400 si alguno sigue sin enlazar |
 | POST | `/admin/orders/:id/cancel` | cancela (y en Dropi si ya existe) |
+| GET | `/admin/orders/export` | `?status&from&to&ids&paymentMethod&q` → archivo CSV para cargar en Dropi (ver abajo). Sin filtros: `confirmed` sin `dropi.orderId` |
+| POST | `/admin/orders/:id/dropi-manual` | `{ dropiOrderId?: number, guide?: string, carrier?: string }` → el pedido ya se creó a mano en app.dropi.ec. Solo desde `confirmed`/`sent_to_dropi`. Queda `sent_to_dropi` (o `shipped` si trae guía), guarda `dropi.*`, limpia `dropi.error` y anota "Creado en Dropi manualmente" en el historial. 409 si el id de Dropi ya está en otro pedido. Responde `Order` |
+| PUT | `/admin/orders/:id/shipping` | `{ guide?, carrier?, status?: "shipped" \| "delivered" \| "returned" }` → envío a mano (no hay sincronización automática). Transiciones: `shipped` desde `confirmed`/`sent_to_dropi` (exige guía); `delivered` desde `confirmed`/`sent_to_dropi`/`shipped`; `returned` desde `sent_to_dropi`/`shipped`/`delivered`. Agregar guía sin `status` a un pedido que no salía lo pasa a `shipped`. `delivered` en contra entrega pone `paymentStatus: "paid"`. Responde `Order` |
 | GET | `/admin/leads` | `Paginated<Lead>` carritos abandonados (no convertidos) |
 | GET/PUT | `/admin/settings` | `Settings` completo |
+
+### Pedidos a Dropi a mano
+
+Mientras la API de Dropi esté bloqueada, los pedidos **no** se crean solos en Dropi: quedan `confirmed` con
+`dropi.error`. El flujo es: copiar datos o exportar → crear en app.dropi.ec → `dropi-manual` → `shipping`.
+
+`GET /admin/orders/export` responde `text/csv; charset=utf-8` con BOM, separador `;` y
+`Content-Disposition: attachment; filename="kova-pedidos-dropi-AAAAMMDDHHMM.csv"` (header `X-Orders-Count`).
+Una fila por producto. Columnas: Número de pedido, Fecha (hora Ecuador), Nombre, Apellido, Celular, Cédula,
+Correo, Provincia, Ciudad, Dirección, Referencia, ID producto Dropi, ID variación Dropi, Producto, Variante,
+Cantidad, Precio unitario, Total del pedido, Método de pago, Cobrar al entregar (`SÍ`/`NO`), Valor a recaudar
+(total si es contra entrega, `0.00` si no), Notas. Montos en **dólares con punto decimal** (`12.50`).
+Celular y cédula salen como `="0991234567"` para que Excel no borre el cero inicial.
+Query: `status` (un `OrderStatus` o `all`), `from`/`to` (`AAAA-MM-DD`, hora Ecuador), `ids` (ids separados por
+coma: ignora los demás filtros), `paymentMethod`, `q`. Máximo 1000 pedidos.
 
 ### Productos manuales y enlace con Dropi
 
