@@ -8,7 +8,7 @@ import { defaultOffers } from "../utils/pricing";
 import { escapeRegex } from "../utils/regex";
 import { slugify } from "../utils/slugify";
 import { uploadBuffer } from "./cloudinary.service";
-import { sanitizeDescription } from "./dropiSync.service";
+import { sanitizeDescription, UNKNOWN_STOCK } from "./dropiSync.service";
 
 const TIMEZONE = "America/Guayaquil";
 /** Ecuador continental no tiene horario de verano: UTC-5 fijo. */
@@ -164,6 +164,14 @@ export async function getProduct(id: string) {
   return product.toObject();
 }
 
+function units(value: unknown, field: string): number {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0 || n > 100000) {
+    throw new CustomError(`${field} debe ser un número entero de 0 en adelante`, 400);
+  }
+  return n;
+}
+
 function cents(value: unknown, field: string, allowZero = false): number {
   const n = Number(value);
   if (!Number.isInteger(n) || n < 0 || (!allowZero && n === 0)) {
@@ -232,6 +240,7 @@ export async function createProduct(body: any) {
     compareAtPrice: input.compareAtPrice ? cents(input.compareAtPrice, "El precio tachado", true) : 0,
     costPrice: input.costPrice ? cents(input.costPrice, "El costo del proveedor", true) : 0,
     offers: price ? defaultOffers(price) : [],
+    stock: input.stock !== undefined && input.stock !== "" ? units(input.stock, "El stock") : UNKNOWN_STOCK,
     isPublished: false,
     ...(dropiId ? { dropiId } : {}),
   });
@@ -288,6 +297,9 @@ export async function updateProduct(id: string, body: any) {
   if (input.isPublished !== undefined) product.isPublished = Boolean(input.isPublished);
   if (input.isFeatured !== undefined) product.isFeatured = Boolean(input.isFeatured);
   if (input.price !== undefined) product.price = cents(input.price, "El precio");
+  // Con variantes el stock del producto es la suma de ellas; se recalcula abajo.
+  if (input.stock !== undefined && !product.variants.length)
+    product.stock = units(input.stock, "El stock");
   if (input.compareAtPrice !== undefined)
     product.compareAtPrice = cents(input.compareAtPrice, "El precio tachado", true);
 
@@ -308,6 +320,7 @@ export async function updateProduct(id: string, body: any) {
       }
       if (change.costPrice !== undefined)
         variant.costPrice = cents(change.costPrice, "El costo de la variante", true);
+      if (change.stock !== undefined) variant.stock = units(change.stock, "El stock de la variante");
       if (change.compareAtPrice !== undefined) {
         variant.compareAtPrice = cents(
           change.compareAtPrice,
@@ -347,6 +360,9 @@ export async function updateProduct(id: string, body: any) {
     product.offers = offers;
   }
 
+  if (product.variants.length) {
+    product.stock = product.variants.reduce((acc: number, v: any) => acc + (v.stock || 0), 0);
+  }
   if (product.type === "VARIABLE" && product.variants.length) {
     product.price = Math.min(...product.variants.map((v: any) => v.price || Infinity));
     if (!Number.isFinite(product.price)) product.price = 0;
