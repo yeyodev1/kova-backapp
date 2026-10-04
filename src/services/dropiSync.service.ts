@@ -1,3 +1,4 @@
+import { isValidObjectId } from "mongoose";
 import sanitizeHtml from "sanitize-html";
 import { CustomError } from "../errors/customError.error";
 import { Location } from "../models/location.model";
@@ -98,13 +99,24 @@ async function uniqueSlug(base: string, excludeId?: unknown): Promise<string> {
  * Lo que manda Dropi y se puede refrescar sin pisar lo que editó la tienda:
  * stock, costos, sugeridos y (solo si no hay) imágenes.
  */
-function applyRefresh(product: any, dropi: any) {
+function applyRefresh(product: any, dropi: any, markupPercent: number) {
   const isVariable = String(dropi?.type || "").toUpperCase() === "VARIABLE";
   product.costPrice = dropiService.toCents(dropi?.sale_price);
   product.suggestedPrice = dropiService.toCents(dropi?.suggested_price);
+  const variations: any[] = Array.isArray(dropi?.variations) ? dropi.variations : [];
+
+  if (isVariable && variations.length) {
+    // Variaciones que el proveedor agregó después: entran con el precio calculado como al importar.
+    const known = new Set((product.variants || []).map((v: any) => v.dropiVariationId));
+    const fresh = variations.filter((v) => Number(v?.id) && !known.has(Number(v.id)));
+    if (fresh.length) {
+      product.variants.push(...fresh.map((v) => mapVariation(v, markupPercent)));
+      product.type = "VARIABLE";
+      if (!product.price) product.price = Math.min(...product.variants.map((v: any) => v.price));
+    }
+  }
 
   if (isVariable && product.variants?.length) {
-    const variations: any[] = Array.isArray(dropi?.variations) ? dropi.variations : [];
     for (const variant of product.variants) {
       const match = variations.find((v) => Number(v?.id) === variant.dropiVariationId);
       if (!match) {
@@ -160,21 +172,60 @@ export async function searchCatalog(q: string, page = 1, limit = 20) {
   return { items, total: count };
 }
 
+/**
+ * Acepta el id (`12345`) o un link de producto de Dropi. Los links cambian de forma
+ * (`/product-details/12345`, `?id=12345`, con slug...), así que se toma el último
+ * número de 3 o más dígitos del path o del query.
+ */
+export function parseDropiReference(dropiId: unknown, url: unknown): number {
+  const direct = Number(dropiId);
+  if (
+    dropiId !== undefined &&
+    dropiId !== null &&
+    dropiId !== "" &&
+    Number.isInteger(direct) &&
+    direct > 0
+  ) {
+    return direct;
+  }
+  const text = String(url ?? dropiId ?? "").trim();
+  if (!text) throw new CustomError("Indica el ID o el link del producto de Dropi", 400);
+  if (/^\d+$/.test(text)) return Number(text);
+
+  let haystack = text;
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
+    haystack = `${parsed.pathname} ${parsed.search} ${parsed.hash}`;
+  } catch {
+    // No es URL válida: se busca en el texto tal cual.
+  }
+  const matches = haystack.match(/\d{3,}/g);
+  const id = matches ? Number(matches[matches.length - 1]) : NaN;
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new CustomError("No encontré el ID del producto en ese link de Dropi", 400);
+  }
+  return id;
+}
+
+async function markupOr(markupPercent?: number): Promise<number> {
+  if (markupPercent !== undefined && Number.isFinite(markupPercent) && markupPercent >= 0) {
+    return markupPercent;
+  }
+  const settings = await getSettings();
+  return settings.defaultMarkupPercent;
+}
+
 export async function importProduct(dropiId: number, markupPercent?: number) {
   if (!Number.isInteger(dropiId) || dropiId <= 0) {
     throw new CustomError("El id de Dropi no es válido", 400);
   }
-  const settings = await getSettings();
-  const markup =
-    markupPercent !== undefined && Number.isFinite(markupPercent) && markupPercent >= 0
-      ? markupPercent
-      : settings.defaultMarkupPercent;
+  const markup = await markupOr(markupPercent);
 
   const dropi = await dropiService.getProduct(dropiId);
 
   const existing = await Product.findOne({ dropiId });
   if (existing) {
-    applyRefresh(existing, dropi);
+    applyRefresh(existing, dropi, markup);
     await existing.save();
     return existing.toObject();
   }
@@ -221,10 +272,30 @@ export async function importProduct(dropiId: number, markupPercent?: number) {
   return product.toObject();
 }
 
+/** Re-sincroniza un producto enlazado: stock, costo y variantes nuevas. */
+export async function syncProduct(id: string) {
+  if (!isValidObjectId(id)) throw new CustomError("Producto no encontrado", 404);
+  const product = await Product.findById(id);
+  if (!product) throw new CustomError("Producto no encontrado", 404);
+  if (!product.dropiId) {
+    throw new CustomError(
+      "Este producto no está enlazado con Dropi. Agrega su ID de Dropi y guarda antes de sincronizar.",
+      400,
+    );
+  }
+  const dropi = await dropiService.getProduct(product.dropiId);
+  applyRefresh(product, dropi, await markupOr());
+  await product.save();
+  return product.toObject();
+}
+
 /** Refresca stock y costo de los importados, empezando por los más viejos. */
 export async function syncProducts() {
   const started = Date.now();
-  const products = await Product.find({ dropiId: { $exists: true } }).sort({ lastSyncedAt: 1 });
+  const markup = await markupOr();
+  const products = await Product.find({ dropiId: { $exists: true, $ne: null } }).sort({
+    lastSyncedAt: 1,
+  });
   let updated = 0;
   let failed = 0;
 
@@ -232,7 +303,7 @@ export async function syncProducts() {
     if (Date.now() - started > TIME_BUDGET_MS) break;
     try {
       const dropi = await dropiService.getProduct(product.dropiId);
-      applyRefresh(product, dropi);
+      applyRefresh(product, dropi, markup);
       await product.save();
       updated++;
     } catch (error: any) {
