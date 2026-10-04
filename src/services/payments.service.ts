@@ -90,7 +90,7 @@ function parseAccount(input: any, current?: IBankAccount): IBankAccount {
 
   const type = String(value("type") ?? "").trim();
   const matchedType = BANK_ACCOUNT_TYPES.find((t) => t.toLowerCase() === type.toLowerCase());
-  if (!matchedType) throw new CustomError("El tipo de cuenta debe ser Ahorros o Corriente", 400);
+  if (!matchedType) throw new CustomError("El tipo de cuenta debe ser Ahorros, Corriente o Transaccional", 400);
 
   const rawNumber = String(value("number") ?? "").replace(/[\s-]/g, "");
   if (!/^\d{5,20}$/.test(rawNumber)) {
