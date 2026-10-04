@@ -14,6 +14,7 @@ const admin = Router();
 admin.use(authMiddleware, adminMiddleware);
 admin.get("/events", whatsappBotController.adminEvents);
 admin.get("/sessions", whatsappBotController.adminSessions);
+admin.get("/conversations/:phone", whatsappBotController.adminConversation);
 admin.post("/sessions/:phone/reset", whatsappBotController.adminReset);
 admin.post("/sessions/:phone/silence", whatsappBotController.adminSilence);
 admin.post("/sessions/:phone/unsilence", whatsappBotController.adminUnsilence);
