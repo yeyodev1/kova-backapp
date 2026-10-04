@@ -144,14 +144,16 @@ Reglas de `POST /orders`:
 | Método | Ruta | Uso |
 |---|---|---|
 | GET | `/admin/dashboard` | `{ ordersToday, revenueToday, pendingTransfers, dropiErrors, ordersByStatus, last7Days: [{ date, orders, revenue }] }` |
+| GET | `/admin/dropi/status` | `?refresh=1` → `{ configured, connected, message, blockedIp, integrationUrl, urlMismatch, checkedAt }`. Una sola llamada liviana a Dropi (`GET /department`), cacheada 60 s (`refresh=1` la salta, máximo cada 10 s). `blockedIp` = IP que Dropi reporta en su `401 Access denied`. `integrationUrl` sale del payload del token (decodificado sin verificar firma); el token nunca se devuelve. `urlMismatch` = la integración no está registrada con `kovashopper.com` |
 | GET | `/admin/dropi/products` | `?q&page&limit` → busca en el catálogo de Dropi: `{ items: [{ dropiId, name, type, costPrice, suggestedPrice, stock, image, imported: boolean }], total }` |
-| POST | `/admin/dropi/import` | `{ dropiId, markupPercent? }` → crea/actualiza `Product` (borrador) con imágenes, variantes, stock, precio = sugerido o costo × (1+markup) |
+| POST | `/admin/dropi/import` | `{ dropiId?, url?, markupPercent? }` → crea/actualiza `Product` (borrador) con imágenes, variantes, stock, precio = sugerido o costo × (1+markup). Acepta el id (`12345`) o un link de producto de Dropi (`.../product-details/12345`, `?id=12345`): se toma el último número de 3+ dígitos del path/query. 400 si no hay id |
 | POST | `/admin/dropi/sync-products` | refresca stock y costo de todos los importados |
 | POST | `/admin/dropi/sync-locations` | descarga provincias y ciudades de Dropi a Mongo |
 | POST | `/admin/dropi/sync-orders` | refresca estado/guía de órdenes `sent_to_dropi`/`shipped` |
 | GET | `/admin/products` | `?q&page&published` → `Paginated<Product>` (con campos admin) |
 | POST | `/admin/products` | crear producto manual (201). `title` obligatorio; opcionales `slug, shortDescription, description, category, images, price, compareAtPrice, costPrice, dropiId`. Slug único, `isPublished:false`, ofertas 1/2/3 u si hay precio |
 | GET/PUT/DELETE | `/admin/products/:id` | editar precio, ofertas, textos, beneficios, FAQs, publicar, destacar. Enlace con Dropi: `dropiId` (entero o `null` para desenlazar; 409 si otro producto ya lo usa), `costPrice` (centavos) y por variante `variants[].dropiVariationId` / `variants[].costPrice` |
+| POST | `/admin/products/:id/sync-dropi` | re-sincroniza un producto enlazado con su `dropiId`: stock, costo, sugerido y variantes nuevas (entran con el margen por defecto). 400 si no está enlazado. Responde el `Product` actualizado (`lastSyncedAt` nuevo) |
 | POST | `/admin/products/:id/images` | multipart `image` → Cloudinary, agrega a `images` |
 | GET | `/admin/orders` | `?status&paymentMethod&q&page` → `Paginated<Order>` |
 | GET | `/admin/orders/:id` | `Order` |
@@ -166,6 +168,9 @@ Reglas de `POST /orders`:
 Mientras la API de Dropi no esté habilitada, el panel crea productos a mano y guarda su **ID de Dropi**
 (el de la ficha del producto en Dropi). Con ese ID el producto entra en `sync-products` (stock y costo) y
 sus pedidos se crean en Dropi como los de un producto importado.
+
+Si Dropi rechaza por IP, cualquier endpoint que le pegue responde 502 con
+`"Dropi bloquea la IP <ip>. Pide a soporte de Dropi que la agregue a tu integración."`.
 
 ## Cron (Vercel, `Bearer CRON_SECRET`)
 
