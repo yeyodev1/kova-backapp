@@ -100,7 +100,6 @@ export async function markCreatedInDropi(id: string, body: any) {
   if (carrier) order.dropi.carrier = carrier;
   order.dropi.error = "";
   order.dropi.lockedAt = null;
-  order.dropi.lastSyncAt = new Date();
 
   const details = [
     dropiOrderId ? `#${dropiOrderId}` : "",
@@ -164,7 +163,6 @@ export async function updateShipping(id: string, body: any) {
     notes.push(carrier ? `Transportadora ${carrier}` : "Transportadora borrada");
   order.dropi.guide = guide;
   order.dropi.carrier = carrier;
-  order.dropi.lastSyncAt = new Date();
 
   if (status && status !== order.status) {
     order.status = status;
