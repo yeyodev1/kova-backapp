@@ -140,7 +140,7 @@ Reglas de `POST /orders`:
 - `phone` ecuatoriano: 10 dígitos que empiezan en `09` (normalizar `+593 9...` → `09...`).
 - `cod` → crea en Dropi al instante; si Dropi falla, la orden queda `confirmed` con `dropi.error` y el admin reintenta.
 - `card` → `pending_payment` + config de la Cajita. `transfer` → `awaiting_transfer` + `settings.bankAccounts` en la respuesta del front.
-- Envía correo de confirmación si hay `email` y Resend configurado.
+- Envía el correo "Recibimos tu pedido" al cliente (si dejó `email`) y "Nuevo pedido" al equipo. Ver [Correos del pedido](#correos-del-pedido).
 
 ### `GET /orders/pay/:token` (link de pago `/pagar/<token>`)
 
@@ -186,7 +186,7 @@ Endpoints `/whatsapp-bot/*` para BuilderBot y `/whatsapp-bot/admin/*` para el pa
 
 | Método | Ruta | Uso |
 |---|---|---|
-| GET | `/admin/dashboard` | `{ ordersToday, revenueToday, pendingTransfers, dropiErrors, ordersByStatus, last7Days: [{ date, orders, revenue }] }` |
+| GET | `/admin/dashboard` | `{ ordersToday, revenueToday, pendingTransfers, dropiErrors, todoCount, ordersByStatus, last7Days: [{ date, orders, revenue }] }`. `todoCount` = pedidos por gestionar (ver abajo); es el badge del menú Pedidos |
 | GET | `/admin/dropi/status` | `?refresh=1` → `{ configured, connected, message, blockedIp, integrationUrl, urlMismatch, checkedAt }`. Una sola llamada liviana a Dropi (`GET /department`), cacheada 60 s (`refresh=1` la salta, máximo cada 10 s). `blockedIp` = IP que Dropi reporta en su `401 Access denied`. `integrationUrl` sale del payload del token (decodificado sin verificar firma); el token nunca se devuelve. `urlMismatch` = la integración no está registrada con `kovashopper.com` |
 | GET | `/admin/dropi/products` | `?q&page&limit` → busca en el catálogo de Dropi: `{ items: [{ dropiId, name, type, costPrice, suggestedPrice, stock, image, imported: boolean }], total }` |
 | POST | `/admin/dropi/import` | `{ dropiId?, url?, markupPercent? }` → crea/actualiza `Product` (borrador) con imágenes, variantes, stock, precio = sugerido o costo × (1+markup). Acepta el id (`12345`) o un link de producto de Dropi (`.../product-details/12345`, `?id=12345`): se toma el último número de 3+ dígitos del path/query. 400 si no hay id |
@@ -202,7 +202,7 @@ Endpoints `/whatsapp-bot/*` para BuilderBot y `/whatsapp-bot/admin/*` para el pa
 | GET/PUT/DELETE | `/admin/products/:id` | editar precio, ofertas, textos, beneficios, FAQs, publicar, destacar. Enlace con Dropi: `dropiId` (entero o `null` para desenlazar; 409 si otro producto ya lo usa), `costPrice` (centavos) y por variante `variants[].dropiVariationId` / `variants[].costPrice` |
 | POST | `/admin/products/:id/sync-dropi` | re-sincroniza un producto enlazado con su `dropiId`: stock, costo, sugerido y variantes nuevas (entran con el margen por defecto). 400 si no está enlazado. Responde el `Product` actualizado (`lastSyncedAt` nuevo) |
 | POST | `/admin/products/:id/images` | multipart `image` → Cloudinary, agrega a `images` |
-| GET | `/admin/orders` | `?status&paymentMethod&q&page` → `Paginated<Order>` |
+| GET | `/admin/orders` | `?status&paymentMethod&q&page&dropiError=1&todo=1` → `Paginated<Order & { todo }>`. Cada fila trae `todo: "dropi" \| "receipt" \| "guide" \| null` (qué le toca al equipo). `todo=1` filtra solo los **por gestionar** |
 | GET | `/admin/orders/:id` | `Order` |
 | POST | `/admin/orders/:id/confirm-transfer` | marca pagado y crea en Dropi |
 | POST | `/admin/orders/:id/send-to-dropi` | reintento manual. Completa `dropiId`/`dropiVariationId` de los items con los del producto actual (productos enlazados después de la compra); 400 si alguno sigue sin enlazar |
@@ -293,5 +293,35 @@ a `/admin/bot`. Nunca bloquea la respuesta del bot.
 
 | Método | Ruta | Uso |
 |---|---|---|
-| GET | `/admin/team` | `[{ _id, name, email, isActive, notifyHumanRequests }]` |
-| PUT | `/admin/team/:id` | `{ notifyHumanRequests: boolean }` → el administrador actualizado |
+| GET | `/admin/team` | `[{ _id, name, email, isActive, notifyOrders, notifyHumanRequests }]` |
+| PUT | `/admin/team/:id` | `{ notifyOrders?: boolean, notifyHumanRequests?: boolean }` (al menos uno) → el administrador actualizado. 400 si no viene ninguno |
+
+## Pedidos por gestionar (`todo=1`)
+
+Pedidos que esperan una acción del equipo. Es el filtro por defecto de Panel → Pedidos.
+
+| `todo` | Condición | Qué hacer |
+|---|---|---|
+| `dropi` | `confirmed` sin `dropi.orderId` (pagado o contra entrega) | Pasar a Dropi |
+| `receipt` | `transfer_review` | Revisar comprobante y confirmar la transferencia |
+| `guide` | `sent_to_dropi` sin guía y con más de 48 h desde que entró a Dropi (entrada `sent_to_dropi` del historial) | Pedir la guía |
+
+## Correos del pedido
+
+`src/services/orderNotifications.service.ts` decide qué correo sale en cada momento (pedidos de la web y del bot,
+que también pasa por `order.service.createOrder`). Se llama solo en la transición, sin `await`: un correo que falla
+queda en el log (`[email] …`) y nunca rompe el flujo. Salen desde `RESEND_FROM_EMAIL`.
+
+| Momento | Dónde se dispara | Cliente (solo si dejó `email`) | Equipo |
+|---|---|---|---|
+| Pedido creado (web o bot) | `createOrder` | "Recibimos tu pedido KV-…": resumen, total por método y próximos pasos (tarjeta: botón a `/pagar/<payToken>` si sigue pendiente; transferencia: cuentas de Ajustes y cómo enviar el comprobante; contra entrega: "te contactamos para coordinar"), link de rastreo | "Nuevo pedido KV-… · $X · método · canal": cliente, dirección, productos con ID de Dropi, botón al panel y WhatsApp al cliente |
+| Pago aprobado (tarjeta o transferencia) | `confirmPayphone`, `confirmTransfer` | "Pago confirmado" | "Pago confirmado: pasa el pedido a Dropi" (o "ya está en Dropi") |
+| Comprobante recibido (web o bot) | `attachReceipt` | — | "Comprobante por revisar KV-…" con link al comprobante |
+| Enviado con guía | `dropi-manual` con guía, `PUT shipping` → `shipped` | "Tu pedido va en camino" con transportadora y guía | — |
+| Entregado | `PUT shipping` → `delivered` | "¡Entregado!" (gracias + WhatsApp) | — |
+| Cancelado | `cancelOrder` | "Pedido cancelado" | "Pedido cancelado" (+ reembolso si estaba pagado, + revisar Dropi) |
+
+- **Equipo** = administradores activos con `notifyOrders !== false` (por defecto sí). Cada uno lo apaga en
+  Panel → Ajustes → Avisos por correo. `admin@kovashopper.com` no tiene buzón: apágalo ahí en producción.
+- Responder un correo del equipo le escribe al cliente (`replyTo` = correo del cliente).
+- Los cambios de estado que trae la sincronización automática con Dropi (`dropiSync`) no envían correo todavía.
