@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import * as dropiClipService from "../services/dropiClip.service";
 import * as dropiStatusService from "../services/dropiStatus.service";
 import * as dropiSyncService from "../services/dropiSync.service";
 
@@ -34,6 +35,29 @@ export async function importProduct(req: Request, res: Response, next: NextFunct
         : Number(markupPercent);
     const id = dropiSyncService.parseDropiReference(dropiId, url);
     res.status(200).json(await dropiSyncService.importProduct(id, markup));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** POST /api/admin/dropi/clip — body: { products: ClipProduct[], markupPercent? } */
+export async function clip(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { products, markupPercent } = req.body ?? {};
+    const markup =
+      markupPercent === undefined || markupPercent === null || markupPercent === ""
+        ? undefined
+        : Number(markupPercent);
+    res.status(200).json(await dropiClipService.importClip(products, markup));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** GET /api/admin/dropi/linked?ids=1,2,3 */
+export async function linked(req: Request, res: Response, next: NextFunction) {
+  try {
+    res.status(200).json(await dropiClipService.linkedProducts(req.query.ids));
   } catch (error) {
     next(error);
   }
