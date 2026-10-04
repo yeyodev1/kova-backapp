@@ -28,7 +28,7 @@ export function sanitizeDescription(html: unknown): string {
   return sanitizeHtml(String(html ?? ""), SANITIZE_OPTIONS).trim();
 }
 
-function plainText(html: string, max: number): string {
+export function plainText(html: string, max: number): string {
   const text = sanitizeHtml(html, { allowedTags: [], allowedAttributes: {} })
     .replace(/\s+/g, " ")
     .trim();
@@ -66,25 +66,49 @@ function mapVariation(variation: any, markupPercent: number) {
     const value = attributeValue(av);
     if (value) attributes[attributeName(av, i)] = value;
   });
-  const costPrice = dropiService.toCents(variation?.sale_price);
-  const suggestedPrice = dropiService.toCents(variation?.suggested_price);
-  const price = salePrice(costPrice, suggestedPrice, markupPercent);
+  return buildVariant(
+    {
+      dropiVariationId: Number(variation?.id) || null,
+      name:
+        Object.values(attributes).join(" / ") ||
+        String(variation?.sku || `Variante ${variation?.id}`),
+      attributes,
+      stock: dropiService.variationStock(variation),
+      sku: String(variation?.sku || ""),
+      costPrice: dropiService.toCents(variation?.sale_price),
+      suggestedPrice: dropiService.toCents(variation?.suggested_price),
+    },
+    markupPercent,
+  );
+}
+
+export interface VariantInput {
+  dropiVariationId: number | null;
+  name: string;
+  attributes?: Record<string, string>;
+  stock: number;
+  sku?: string;
+  costPrice: number;
+  suggestedPrice: number;
+}
+
+/** Variante con precio de venta calculado igual que al importar desde la API. */
+export function buildVariant(input: VariantInput, markupPercent: number) {
+  const price = salePrice(input.costPrice, input.suggestedPrice, markupPercent);
   return {
-    dropiVariationId: Number(variation?.id) || null,
-    name:
-      Object.values(attributes).join(" / ") ||
-      String(variation?.sku || `Variante ${variation?.id}`),
-    attributes,
+    dropiVariationId: input.dropiVariationId,
+    name: input.name,
+    attributes: input.attributes ?? {},
     price,
     compareAtPrice: compareAtFor(price),
-    stock: dropiService.variationStock(variation),
-    sku: String(variation?.sku || ""),
-    costPrice,
-    suggestedPrice,
+    stock: input.stock,
+    sku: input.sku ?? "",
+    costPrice: input.costPrice,
+    suggestedPrice: input.suggestedPrice,
   };
 }
 
-async function uniqueSlug(base: string, excludeId?: unknown): Promise<string> {
+export async function uniqueSlug(base: string, excludeId?: unknown): Promise<string> {
   const root = slugify(base) || "producto";
   let candidate = root;
   for (let i = 2; ; i++) {
@@ -207,7 +231,7 @@ export function parseDropiReference(dropiId: unknown, url: unknown): number {
   return id;
 }
 
-async function markupOr(markupPercent?: number): Promise<number> {
+export async function markupOr(markupPercent?: number): Promise<number> {
   if (markupPercent !== undefined && Number.isFinite(markupPercent) && markupPercent >= 0) {
     return markupPercent;
   }
@@ -231,30 +255,62 @@ export async function importProduct(dropiId: number, markupPercent?: number) {
   }
 
   const isVariable = String(dropi?.type || "").toUpperCase() === "VARIABLE";
-  const costPrice = dropiService.toCents(dropi?.sale_price);
-  const suggestedPrice = dropiService.toCents(dropi?.suggested_price);
-
   const variations: any[] = Array.isArray(dropi?.variations) ? dropi.variations : [];
-  const variants = isVariable ? variations.map((v) => mapVariation(v, markup)) : [];
-
-  const price = variants.length
-    ? Math.min(...variants.map((v) => v.price))
-    : salePrice(costPrice, suggestedPrice, markup);
-  const stock = variants.length
-    ? variants.reduce((acc, v) => acc + v.stock, 0)
-    : dropiService.productStock(dropi);
-
-  const description = sanitizeDescription(dropi?.description);
-  const title = String(dropi?.name || `Producto ${dropiId}`).trim();
   const categories: any[] = Array.isArray(dropi?.categories) ? dropi.categories : [];
 
-  const product = await Product.create({
-    slug: await uniqueSlug(title),
-    title,
-    shortDescription: plainText(description, 160),
-    description,
-    images: galleryImages(dropi),
-    category: String(categories[0]?.name || "").trim(),
+  const product = await createDraftProduct(
+    {
+      dropiId,
+      title: String(dropi?.name || `Producto ${dropiId}`).trim(),
+      description: sanitizeDescription(dropi?.description),
+      images: galleryImages(dropi),
+      category: String(categories[0]?.name || "").trim(),
+      costPrice: dropiService.toCents(dropi?.sale_price),
+      suggestedPrice: dropiService.toCents(dropi?.suggested_price),
+      stock: dropiService.productStock(dropi),
+      variants: isVariable ? variations.map((v) => mapVariation(v, markup)) : [],
+      dropiSupplierId: Number(dropi?.user_id ?? dropi?.user?.id) || null,
+    },
+    markup,
+  );
+
+  return product.toObject();
+}
+
+export interface DraftInput {
+  dropiId: number;
+  title: string;
+  /** HTML ya saneado. */
+  description: string;
+  images: string[];
+  category: string;
+  costPrice: number;
+  suggestedPrice: number;
+  /** Stock del producto simple; con variantes se usa la suma de ellas. */
+  stock: number;
+  variants: ReturnType<typeof buildVariant>[];
+  dropiSupplierId?: number | null;
+}
+
+/**
+ * Crea el borrador enlazado a Dropi con las reglas de precio de la tienda: sugerido si deja margen,
+ * si no costo × (1 + margen) a .90; tachado +40% y ofertas 1/2/3. Lo usan la importación por API
+ * y el botón "Enviar a Kova", para que ambos caminos den el mismo producto.
+ */
+export async function createDraftProduct(input: DraftInput, markup: number) {
+  const { variants } = input;
+  const price = variants.length
+    ? Math.min(...variants.map((v) => v.price))
+    : salePrice(input.costPrice, input.suggestedPrice, markup);
+  const stock = variants.length ? variants.reduce((acc, v) => acc + v.stock, 0) : input.stock;
+
+  return Product.create({
+    slug: await uniqueSlug(input.title),
+    title: input.title,
+    shortDescription: plainText(input.description, 160),
+    description: input.description,
+    images: input.images,
+    category: input.category,
     price,
     compareAtPrice: compareAtFor(price),
     type: variants.length ? "VARIABLE" : "SIMPLE",
@@ -262,14 +318,12 @@ export async function importProduct(dropiId: number, markupPercent?: number) {
     offers: defaultOffers(price),
     stock,
     isPublished: false,
-    dropiId,
-    dropiSupplierId: Number(dropi?.user_id ?? dropi?.user?.id) || null,
-    costPrice,
-    suggestedPrice,
+    dropiId: input.dropiId,
+    dropiSupplierId: input.dropiSupplierId ?? null,
+    costPrice: input.costPrice,
+    suggestedPrice: input.suggestedPrice,
     lastSyncedAt: new Date(),
   });
-
-  return product.toObject();
 }
 
 /** Re-sincroniza un producto enlazado: stock, costo y variantes nuevas. */
