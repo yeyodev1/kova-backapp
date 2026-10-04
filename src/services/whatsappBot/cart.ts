@@ -1,3 +1,4 @@
+import { env } from "../../config/env";
 import { BotProduct, formatCents, productLine } from "./catalog";
 import { askNext } from "./checkout";
 import { extractChoice, extractQuantity, isYes, normalize, quantityAnswer } from "./intents";
@@ -22,11 +23,17 @@ export function showOptions(
   const list = products.map((product, index) => productLine(product, index + 1)).join("\n");
   const ask =
     products.length === 1
-      ? "Te lo agrego al pedido? 🛒 Respóndeme *sí* o *1*"
-      : "Cuál te agrego? 🛒 Respóndeme con el número";
+      ? "Te lo agrego al pedido? 🛒\nRespóndeme *sí* o *1* ✅"
+      : "Cuál te agrego? 🛒\nRespóndeme con el número 👆";
+  // Las fotos convencen más que la descripción: con un producto va su página; con varios, la tienda.
+  const store = env.PUBLIC_WEB_URL.replace(/\/+$/, "");
+  const photos =
+    products.length === 1
+      ? `📸 Mira las fotos aquí:\n${store}/producto/${products[0].slug}`
+      : `📸 Fotos y detalles de todo en:\n${store}/tienda`;
   return reply(
     state,
-    `${intro || "Mira lo que tengo para ti 👇✨"}\n\n${list}\n\n${ask}`,
+    `${intro || "Mira lo que tengo para ti 👇✨"}\n\n${list}\n\n${photos}\n\n${ask}`,
     decision,
   );
 }
