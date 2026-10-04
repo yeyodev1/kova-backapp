@@ -1,5 +1,6 @@
 import { BotProduct, catalogOverview, searchProducts } from "./catalog";
 import {
+  assumeOneUnit,
   chooseProduct,
   continuePending,
   handlePendingStep,
@@ -116,6 +117,13 @@ async function resumePurchase(state: BotState, deps: BotDeps, result: TurnResult
 }
 
 // ─── Turno ───────────────────────────────────────────────────────────────────
+
+/** Más de 3 palabras, o una forma de pago o ciudad: el cliente ya pasó a dar sus datos. */
+function looksLikeDetails(message: string): boolean {
+  const value = normalize(message);
+  if (value.split(/\s+/).filter(Boolean).length > 3) return true;
+  return /\b(transferencia|transfiero|tarjeta|contra ?entrega|efectivo|al recibir|deposito)\b/.test(value);
+}
 
 export async function handleTurn(
   previous: BotState,
@@ -241,6 +249,8 @@ export async function handleTurn(
   if (state.stage === "variant" || state.stage === "quantity") {
     const answered = await handlePendingStep(state, message, deps);
     if (answered) return answered;
+    // Mensaje largo que no es una cantidad (datos de envío, forma de pago): 1 unidad y seguimos.
+    if (state.stage === "quantity" && looksLikeDetails(message)) await assumeOneUnit(state, deps);
   }
 
   const catalog = await deps.loadCatalog();
