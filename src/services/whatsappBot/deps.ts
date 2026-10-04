@@ -3,7 +3,7 @@ import { env } from "../../config/env";
 import { Location } from "../../models/location.model";
 import { Order } from "../../models/order.model";
 import { Product } from "../../models/product.model";
-import { getSettings } from "../../models/setting.model";
+import { activeBankAccounts, getSettings, transfersEnabled } from "../../models/setting.model";
 import { normalizeEcPhone } from "../../utils/phone";
 import { buildQuote, saveLead } from "../checkout.service";
 import { geminiEnabled } from "../gemini.service";
@@ -341,9 +341,17 @@ export async function buildDeps(sessionPhone: string, knownPhone = ""): Promise<
         console.error("[whatsapp-bot] no se pudo guardar el carrito:", error?.message),
       );
     },
-    banks: (settings.bankAccounts || [])
-      .filter((account) => account.number)
-      .map((account) => ({ ...account })),
+    // Interruptor apagado = sin bancos: el bot no ofrece transferencia. Nunca cuentas pausadas.
+    banks: transfersEnabled(settings)
+      ? activeBankAccounts(settings).map((account) => ({
+          bank: account.bank,
+          bankCode: account.bankCode,
+          type: account.type,
+          number: account.number,
+          holder: account.holder,
+          idNumber: account.idNumber,
+        }))
+      : [],
     cardEnabled: isPayphoneConfigured(),
     supportPhone: env.BOT_SUPPORT_PHONE,
     storeUrl: storeUrl(),
