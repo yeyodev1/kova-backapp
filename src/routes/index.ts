@@ -9,6 +9,7 @@ import checkoutRoutes from "./checkout.routes";
 import orderRoutes from "./order.routes";
 import adminRoutes from "./admin.routes";
 import seoRoutes from "./seo.routes";
+import whatsappBotRoutes from "./whatsappBot.routes";
 
 function routerApi(app: Application) {
   const router = express.Router();
@@ -24,6 +25,7 @@ function routerApi(app: Application) {
   router.use("/orders", orderRoutes);
   router.use("/admin", adminRoutes);
   router.use("/seo", seoRoutes);
+  router.use("/whatsapp-bot", whatsappBotRoutes);
 }
 
 export default routerApi;
