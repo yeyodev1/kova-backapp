@@ -9,6 +9,13 @@ import { env } from "../config/env";
 
 export const geminiEnabled = () => Boolean(env.GEMINI_API_KEY);
 
+// Fallos seguidos (por instancia): el bot sigue con reglas, pero si se repiten alguien
+// tiene que mirar la llave o la cuota.
+const health = { failures: 0, lastError: "" };
+
+/** Fallos consecutivos de Gemini y el último error. */
+export const geminiHealth = () => ({ ...health });
+
 export interface GeminiJsonRequest {
   system: string;
   text: string;
@@ -50,12 +57,13 @@ export async function geminiJson<T = any>(request: GeminiJsonRequest): Promise<T
         ?.map((part: any) => part.text || "")
         .join("") || "";
     const json = output.match(/\{[\s\S]*\}/)?.[0];
+    health.failures = 0;
     return json ? (JSON.parse(json) as T) : null;
   } catch (error: any) {
-    console.error(
-      "[gemini] falló la llamada:",
-      error?.response?.data?.error?.message || error?.message || error,
-    );
+    const message = error?.response?.data?.error?.message || error?.message || String(error);
+    health.failures += 1;
+    health.lastError = String(message).slice(0, 300);
+    console.error("[gemini] falló la llamada:", message);
     return null;
   }
 }
