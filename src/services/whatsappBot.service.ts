@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { env } from "../config/env";
 import { WhatsappSession } from "../models/whatsappSession.model";
 import { geminiEnabled } from "./gemini.service";
+import { notifyHumanRequest } from "./teamAlerts.service";
 import { logBotEvent } from "./whatsappBot/activity";
 import { catalogOverview } from "./whatsappBot/catalog";
 import { decideRoute, Decision } from "./whatsappBot/decide";
@@ -353,6 +354,13 @@ export async function turn(body: any, endpoint: string) {
         route: "human",
         decision: result.decision,
         step: result.step,
+        message,
+        reply: result.reply,
+      });
+      // Sin await: el correo al equipo no debe demorar la respuesta al cliente.
+      void notifyHumanRequest({
+        phone,
+        name: `${result.state.firstName || ""} ${result.state.lastName || ""}`.trim(),
         message,
         reply: result.reply,
       });
