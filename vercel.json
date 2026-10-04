@@ -16,8 +16,12 @@
   ],
   "crons": [
     {
-      "path": "/api/cron/ping",
+      "path": "/api/cron/dropi-orders",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/dropi-products",
+      "schedule": "0 */6 * * *"
     }
   ]
 }
