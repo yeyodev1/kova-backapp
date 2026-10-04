@@ -373,15 +373,44 @@ export async function confirmTransfer(id: string) {
 
 // ── Dropi ───────────────────────────────────────────────────────────────────
 
+/**
+ * Los items copian los ids de Dropi al comprar. Si el producto se creó a mano y se
+ * enlazó después, se completan ahora con los ids actuales del producto.
+ */
+async function linkItemsToDropi(order: any) {
+  const pending = order.items.filter((item: any) => !item.dropiId);
+  if (!pending.length) return;
+  const products = await Product.find({ _id: { $in: pending.map((i: any) => i.product) } })
+    .select("dropiId variants._id variants.dropiVariationId")
+    .lean();
+  const byId = new Map(products.map((p: any) => [String(p._id), p]));
+  let changed = false;
+  for (const item of pending) {
+    const product: any = byId.get(String(item.product));
+    if (!product?.dropiId) continue;
+    item.dropiId = product.dropiId;
+    if (item.variantId) {
+      const variant = product.variants?.find((v: any) => String(v._id) === String(item.variantId));
+      item.dropiVariationId = variant?.dropiVariationId ?? null;
+    }
+    changed = true;
+  }
+  if (changed) await order.save();
+}
+
 export async function sendToDropi(id: string) {
   const order = await findOrderOr404(id);
   if (order.dropi.orderId) return order.toObject();
   if (order.status !== "confirmed") {
     throw new CustomError("El pedido no está listo para enviarse a Dropi", 400);
   }
+  await linkItemsToDropi(order);
   const missing = order.items.find((item: any) => !item.dropiId);
   if (missing) {
-    throw new CustomError(`"${missing.title}" no está vinculado a un producto de Dropi`, 400);
+    throw new CustomError(
+      `El producto ${missing.title} no está enlazado a Dropi: agrega su ID en el panel`,
+      400,
+    );
   }
 
   const lock = await Order.findOneAndUpdate(
