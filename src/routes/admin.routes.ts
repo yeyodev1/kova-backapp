@@ -14,6 +14,8 @@ router.get("/dashboard", adminController.dashboard);
 router.get("/dropi/status", dropiController.status);
 router.get("/dropi/products", dropiController.searchCatalog);
 router.post("/dropi/import", dropiController.importProduct);
+router.post("/dropi/clip", dropiController.clip);
+router.get("/dropi/linked", dropiController.linked);
 router.post("/dropi/sync-products", dropiController.syncProducts);
 router.post("/dropi/sync-locations", dropiController.syncLocations);
 router.post("/dropi/sync-orders", dropiController.syncOrders);
@@ -31,7 +33,11 @@ router.post(
 );
 
 router.get("/orders", adminController.listOrders);
+// Antes de /orders/:id para que "export" no se tome como id.
+router.get("/orders/export", adminController.exportOrders);
 router.get("/orders/:id", adminController.getOrder);
+router.post("/orders/:id/dropi-manual", adminController.markCreatedInDropi);
+router.put("/orders/:id/shipping", adminController.updateShipping);
 router.post("/orders/:id/confirm-transfer", adminController.confirmTransfer);
 router.post("/orders/:id/send-to-dropi", adminController.sendToDropi);
 router.post("/orders/:id/cancel", adminController.cancelOrder);
