@@ -1,5 +1,6 @@
 import { env } from "../config/env";
-import { getSettings, IBankAccount } from "../models/setting.model";
+import { activeBankAccounts, getSettings, IBankAccount } from "../models/setting.model";
+import { bankLogo } from "./banks";
 import {
   BRAND,
   emailButton,
@@ -136,8 +137,13 @@ function addressText(order: any): string {
 }
 
 function bankBox(account: IBankAccount): string {
+  const logo = account.logoUrl || bankLogo(account.bankCode || "");
+  // Logo pequeño junto al nombre: los clientes reconocen su banco antes de leer.
+  const mark = logo
+    ? `<img src="${escapeHtml(logo)}" alt="" width="20" height="20" style="vertical-align:middle;border-radius:4px;margin-right:6px">`
+    : "";
   return infoBox(
-    `<strong>${escapeHtml(account.bank)}</strong><br>
+    `${mark}<strong>${escapeHtml(account.bank)}</strong><br>
      Cuenta ${escapeHtml(account.type || "")} N.º <strong>${escapeHtml(account.number)}</strong><br>
      A nombre de ${escapeHtml(account.holder)}${account.idNumber ? ` · ${escapeHtml(account.idNumber)}` : ""}`,
   );
@@ -429,7 +435,8 @@ async function deliver(event: OrderEvent, order: any) {
   const settings = await getSettings();
   const ctx: MailContext = {
     whatsapp: settings.whatsapp || "",
-    bankAccounts: settings.bankAccounts || [],
+    // Nunca las pausadas. Un pedido que ya espera transferencia las ve aunque luego se apague el interruptor.
+    bankAccounts: activeBankAccounts(settings),
   };
   const mails = renderOrderMails(event, order, ctx);
   const sends: Promise<boolean>[] = [];
