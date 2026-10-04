@@ -236,6 +236,15 @@ export async function createOrder(input: any) {
       reference: `Pedido ${order.number} Kova`,
       email: customer.email,
       phoneNumber: `+593${customer.phone.slice(1)}`,
+      // Payphone pide el desglose aunque no se cobre IVA aparte:
+      // amount = amountWithoutTax + amountWithTax + tax + service + tip.
+      amountWithTax: 0,
+      tax: 0,
+      service: 0,
+      tip: 0,
+      // Datos reales del comprador: con cédula o RUC Payphone valida mejor y bloquea menos.
+      ...payphoneDocument(customer.idNumber),
+      optionalParameter: order.number,
     };
   }
 
@@ -248,6 +257,13 @@ export async function createOrder(input: any) {
 }
 
 // ── Payphone ────────────────────────────────────────────────────────────────
+
+/** 10 dígitos = cédula (1), 13 = RUC (2). Otro formato no se manda para no forzar un tipo falso. */
+function payphoneDocument(idNumber: string) {
+  if (/^\d{10}$/.test(idNumber)) return { documentId: idNumber, identificationType: 1 };
+  if (/^\d{13}$/.test(idNumber)) return { documentId: idNumber, identificationType: 2 };
+  return {};
+}
 
 export async function confirmPayphone(id: unknown, clientTransactionId: unknown) {
   const txId = text(clientTransactionId, 50);
