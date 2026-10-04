@@ -22,6 +22,15 @@ export async function listProducts(req: Request, res: Response, next: NextFuncti
   }
 }
 
+/** POST /api/admin/products — crear producto manual */
+export async function createProduct(req: Request, res: Response, next: NextFunction) {
+  try {
+    res.status(201).json(await adminService.createProduct(req.body));
+  } catch (error) {
+    next(error);
+  }
+}
+
 /** GET /api/admin/products/:id */
 export async function getProduct(req: Request, res: Response, next: NextFunction) {
   try {
