@@ -272,6 +272,8 @@ Si Dropi rechaza por IP, cualquier endpoint que le pegue responde 502 con
 
 - `GET /api/cron/dropi-orders` cada hora: sincroniza estados y guías de Dropi.
 - `GET /api/cron/dropi-products` cada 6 horas: refresca stock y costo.
+- `GET /api/cron/incidents-sweep` cada hora (minuto 30): abre incidencias de comprobantes en `transfer_review` hace
+  más de 12 h y pedidos `sent_to_dropi` sin guía hace más de 72 h, y cierra las que ya no aplican. `{ reported, resolved }`.
 
 ## Payphone (Cajita de Pagos)
 
@@ -329,3 +331,71 @@ queda en el log (`[email] …`) y nunca rompe el flujo. Salen desde `RESEND_FROM
   Panel → Ajustes → Avisos por correo. `admin@kovashopper.com` no tiene buzón: apágalo ahí en producción.
 - Responder un correo del equipo le escribe al cliente (`replyTo` = correo del cliente).
 - Los cambios de estado que trae la sincronización automática con Dropi (`dropiSync`) no envían correo todavía.
+
+## Incidencias
+
+Bandeja del panel (`/admin/incidencias`) con los problemas que el equipo tiene que atender. Modelo `Incident`:
+
+```ts
+interface Incident {
+  _id: string;
+  number: string;            // "IN-0001" (contador atómico)
+  type: "dropi_error" | "payment_mismatch" | "payment_failed" | "email_failed" | "bot_error"
+      | "customer_complaint" | "human_request" | "receipt_review_stale" | "order_stuck" | "manual";
+  severity: "high" | "medium" | "low";
+  title: string;
+  detail: string;
+  order: string | null;      // id del pedido
+  orderNumber: string;
+  phone: string;             // 09XXXXXXXX
+  customerName: string;
+  source: "system" | "bot" | "admin";
+  status: "open" | "in_progress" | "resolved" | "dismissed";
+  assignee: { _id: string; name: string; email: string } | null;
+  notes: { _id: string; at: string; by: string | null; byName: string; text: string }[]; // solo en el detalle
+  occurrences: number;       // "×N veces"
+  lastSeenAt: string;
+  resolvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+```
+
+**Deduplicación:** mientras una incidencia está abierta o en curso, el mismo problema (`type` + pedido, si no
+`type` + teléfono, o una clave propia) suma `occurrences`, actualiza `lastSeenAt` y deja lo nuevo como nota del
+"Sistema". Un índice único parcial (`openKey`) lo garantiza aunque lleguen dos a la vez. Al cerrarse, una nueva
+ocurrencia abre otra.
+
+**De dónde salen** (`reportIncident`, nunca lanza):
+
+| Tipo | Severidad | Dónde |
+|---|---|---|
+| `dropi_error` | alta | `sendToDropi`: producto sin enlazar o Dropi rechaza (por pedido). Media: falla `syncOrders` (una sola, clave `sync-orders`) |
+| `payment_failed` | alta | `confirmPayphone`: Payphone no pudo confirmar (transacción inexistente, error de red) |
+| `payment_mismatch` | alta | `confirmPayphone`: Payphone aprobó un monto distinto al del pedido |
+| `email_failed` | baja | `sendEmail` con Resend configurado y rechazo/error; agrupa por destinatario + asunto sin números |
+| `bot_error` | media | Excepción en un turno del bot (por teléfono) o 3 fallos seguidos de Gemini (clave `gemini`) |
+| `customer_complaint` | alta | Bot: reclamo, garantía, devolución, producto dañado (con lo que escribió y su último pedido) |
+| `human_request` | media | Bot: pide asesor (además del correo de siempre) |
+| `receipt_review_stale` | media | Cron: comprobante sin revisar > 12 h |
+| `order_stuck` | media | Cron: `sent_to_dropi` sin guía > 72 h |
+| `manual` | la elegida | `POST /admin/incidents` |
+
+**Cierre automático** (nota "Resuelta sola: …"): confirmar la transferencia cierra `receipt_review_stale`; crear en
+Dropi (API o a mano) cierra `dropi_error`; poner guía (sync, a mano o `PUT shipping`) cierra `order_stuck`; Payphone
+confirmado cierra `payment_failed`/`payment_mismatch`. El cron también cierra las que quedaron sin sentido (pedido
+cancelado, ya pagado, ya en Dropi, ya con guía).
+
+**Correo:** una incidencia **alta nueva** (no sus repeticiones) avisa a los administradores activos con
+`notifyOrders !== false`, con botones a la incidencia, al pedido y al WhatsApp del cliente.
+
+| Método | Ruta | Uso |
+|---|---|---|
+| GET | `/admin/incidents` | `?status=open\|in_progress\|resolved\|dismissed\|all&type&severity&q&page` → `Paginated<Incident>` (sin `notes`, 20 por página). Sin `status`: abiertas + en curso. Orden: severidad y luego `lastSeenAt` desc. `q` busca en número, título, detalle, pedido, cliente y teléfono |
+| GET | `/admin/incidents/summary` | `{ open, in_progress, resolved, dismissed, active, bySeverity: { high, medium, low }, badge }`. `bySeverity` y `badge` cuentan solo abiertas + en curso; `badge` = alta + media (badge del menú) |
+| GET | `/admin/incidents/:id` | `Incident` con `notes` |
+| POST | `/admin/incidents` | `{ title, detail?, severity?, type?: default "manual", orderNumber?, phone?, customerName? }` → 201 `Incident`. 404 si el `KV-` no existe. Nunca se deduplica |
+| PUT | `/admin/incidents/:id` | `{ status?, assignee?: userId \| null, severity? }` → `Incident`. `in_progress` sin responsable la asigna a quien la tomó. Reabrir una cerrada da 409 si ya hay otra abierta por lo mismo. Cada cambio queda como nota |
+| POST | `/admin/incidents/:id/notes` | `{ text }` → 201 `Incident` |
+
+Para asignar, la lista de administradores es `GET /admin/team`.
