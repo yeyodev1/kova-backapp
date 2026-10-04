@@ -287,11 +287,22 @@ function eventsToMessages(events: any[]): ConversationMessage[] {
       continue;
     }
     if (event.kind === "turn" && event.duplicated) {
+      // El cliente repitió el mensaje (o BuilderBot reintentó): se muestra lo que escribió, sin otra respuesta.
+      const brain = takeBrain(event);
+      if (brain)
+        messages.push({
+          id: id(brain, "client"),
+          at: brain.createdAt,
+          role: "client",
+          text: brain.message || event.message || "",
+          ...media(brain.mediaUrl || event.mediaUrl),
+          source: "event",
+        });
       system(
         event,
         "duplicated",
-        "Reintento de BuilderBot: se repitió la respuesta",
-        eventMeta(event),
+        "Mensaje repetido: el bot reenvió la misma respuesta",
+        eventMeta(event, brain),
       );
       continue;
     }
