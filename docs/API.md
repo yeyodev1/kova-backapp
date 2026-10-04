@@ -283,3 +283,15 @@ Doc oficial: https://docs.payphone.app/cajita-de-pagos
   `POST /orders/confirm` (Payphone reversa a los 5 minutos sin confirmación), reintenta sola si falla la red, y solo
   muestra "rechazado" si Payphone o el servidor lo dicen. La confirmación es idempotente y valida el monto.
 - `/pago/respuesta` (ruta anterior) redirige a `/pay-response` conservando la query.
+
+## Avisos al equipo: cliente pide asesor
+
+Cuando el bot de WhatsApp manda un chat a una persona (`route: "human"`: el cliente pide asesor, reclamo,
+garantía o devolución), se envía un correo a cada administrador activo con `notifyHumanRequests` activado
+(por defecto **sí**). El correo trae nombre, teléfono, lo que escribió, botón "Responder por WhatsApp" y link
+a `/admin/bot`. Nunca bloquea la respuesta del bot.
+
+| Método | Ruta | Uso |
+|---|---|---|
+| GET | `/admin/team` | `[{ _id, name, email, isActive, notifyHumanRequests }]` |
+| PUT | `/admin/team/:id` | `{ notifyHumanRequests: boolean }` → el administrador actualizado |
