@@ -18,6 +18,7 @@ router.post("/dropi/sync-locations", dropiController.syncLocations);
 router.post("/dropi/sync-orders", dropiController.syncOrders);
 
 router.get("/products", adminController.listProducts);
+router.post("/products", adminController.createProduct);
 router.get("/products/:id", adminController.getProduct);
 router.put("/products/:id", adminController.updateProduct);
 router.delete("/products/:id", adminController.deleteProduct);
