@@ -4,7 +4,7 @@ import { Lead } from "../models/lead.model";
 import { ORDER_STATUSES, Order, PAYMENT_METHODS } from "../models/order.model";
 import { Product } from "../models/product.model";
 import { getSettings, Setting } from "../models/setting.model";
-import { defaultOffers } from "../utils/pricing";
+import { compareAtFor, defaultOffers, salePrice } from "../utils/pricing";
 import { escapeRegex } from "../utils/regex";
 import { slugify } from "../utils/slugify";
 import { uploadBuffer } from "./cloudinary.service";
@@ -214,37 +214,113 @@ async function uniqueSlug(base: string): Promise<string> {
   return candidate;
 }
 
+/** Fotos ya subidas (Cloudinary) o links pegados: solo https, para no mezclar contenido inseguro. */
+function imageList(value: unknown): string[] {
+  const list = stringList(value, "Las imágenes", 30);
+  for (const url of list) {
+    let ok = false;
+    try {
+      ok = new URL(url).protocol === "https:";
+    } catch {
+      ok = false;
+    }
+    if (!ok) throw new CustomError("Cada imagen debe ser un link que empiece con https://", 400);
+  }
+  return [...new Set(list)];
+}
+
+function hasValue(value: unknown): boolean {
+  return value !== undefined && value !== null && value !== "";
+}
+
 /**
- * Producto creado a mano: sirve mientras la API de Dropi no esté habilitada.
- * Si se enlaza con su ID de Dropi, la sincronización y los pedidos funcionan igual que importado.
+ * Producto creado a mano en una sola llamada ("Subir producto" desde el celular).
+ * Con `costPrice` y sin `price` aplica las mismas reglas que la importación de Dropi:
+ * sugerido si deja margen, si no costo × (1 + margen por defecto) a .90; tachado +40% y ofertas 1/2/3.
  */
 export async function createProduct(body: any) {
   const input = body ?? {};
   const title = String(input.title ?? "").trim().slice(0, 200);
-  if (!title) throw new CustomError("Ponle un título al producto", 400);
+  if (!title) throw new CustomError("Ponle un nombre al producto", 400);
 
   const dropiId = dropiIdOrNull(input.dropiId, "El ID de Dropi");
   if (dropiId) await assertDropiIdFree(dropiId);
 
-  const price = input.price ? cents(input.price, "El precio") : 0;
+  const costPrice = hasValue(input.costPrice)
+    ? cents(input.costPrice, "El costo del proveedor", true)
+    : 0;
+  const suggestedPrice = hasValue(input.suggestedPrice)
+    ? cents(input.suggestedPrice, "El precio sugerido", true)
+    : 0;
+  let price = hasValue(input.price) ? cents(input.price, "El precio", true) : 0;
+  if (!price && (costPrice > 0 || suggestedPrice > 0)) {
+    const settings = await getSettings();
+    price = salePrice(costPrice, suggestedPrice, settings.defaultMarkupPercent);
+  }
+
+  let compareAtPrice = hasValue(input.compareAtPrice)
+    ? cents(input.compareAtPrice, "El precio tachado", true)
+    : 0;
+  // Si no lo mandan, el tachado sale solo como en la importación; mandar 0 lo deja sin tachado.
+  if (!hasValue(input.compareAtPrice) && price) compareAtPrice = compareAtFor(price);
+  if (compareAtPrice && compareAtPrice <= price) {
+    throw new CustomError("El precio tachado debe ser mayor al precio de venta", 400);
+  }
+
+  const images = hasValue(input.images) ? imageList(input.images) : [];
+  const stock = hasValue(input.stock) ? units(input.stock, "El stock") : UNKNOWN_STOCK;
+  const isPublished = Boolean(input.isPublished);
+
+  if (isPublished) {
+    const missing: string[] = [];
+    if (!(price > 0)) missing.push("un precio mayor a cero");
+    if (!images.length) missing.push("al menos una foto");
+    if (missing.length) {
+      throw new CustomError(`Para publicar falta ${missing.join(" y ")}`, 400);
+    }
+  }
+
   const product = await Product.create({
     title,
     slug: await uniqueSlug(input.slug ? String(input.slug) : title),
-    shortDescription: String(input.shortDescription ?? "").slice(0, 300),
+    shortDescription: String(input.shortDescription ?? "")
+      .trim()
+      .slice(0, 300),
     description: input.description ? sanitizeDescription(input.description) : "",
     category: String(input.category ?? "")
       .trim()
       .slice(0, 80),
-    images: input.images ? stringList(input.images, "Las imágenes", 30) : [],
+    images,
+    benefits: hasValue(input.benefits) ? stringList(input.benefits, "Los beneficios") : [],
     price,
-    compareAtPrice: input.compareAtPrice ? cents(input.compareAtPrice, "El precio tachado", true) : 0,
-    costPrice: input.costPrice ? cents(input.costPrice, "El costo del proveedor", true) : 0,
+    compareAtPrice,
+    costPrice,
+    suggestedPrice,
     offers: price ? defaultOffers(price) : [],
-    stock: input.stock !== undefined && input.stock !== "" ? units(input.stock, "El stock") : UNKNOWN_STOCK,
-    isPublished: false,
+    stock,
+    isPublished,
+    isFeatured: Boolean(input.isFeatured),
     ...(dropiId ? { dropiId } : {}),
   });
   return product.toObject();
+}
+
+/** Sube una foto antes de que exista el producto: el front crea el producto ya con sus links. */
+export async function uploadProductImage(file?: Express.Multer.File) {
+  if (!file) throw new CustomError("Adjunta una imagen", 400);
+  if (!file.mimetype.startsWith("image/"))
+    throw new CustomError("El archivo debe ser una imagen", 400);
+  const { url } = await uploadBuffer(file.buffer, "kova/products");
+  return { url };
+}
+
+/** Todas las categorías usadas (también de borradores), para elegir con un toque al subir. */
+export async function productCategories(): Promise<string[]> {
+  const list: string[] = await Product.distinct("category");
+  return list
+    .map((c) => String(c || "").trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, "es"));
 }
 
 export async function updateProduct(id: string, body: any) {
