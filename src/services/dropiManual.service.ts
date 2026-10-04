@@ -1,6 +1,7 @@
 import { isValidObjectId } from "mongoose";
 import { CustomError } from "../errors/customError.error";
 import { Order, OrderStatus } from "../models/order.model";
+import { resolveIncidents } from "./incidents.service";
 import { notifyOrder } from "./orderNotifications.service";
 
 /**
@@ -114,6 +115,11 @@ export async function markCreatedInDropi(id: string, body: any) {
   );
   await order.save();
   if (nextStatus === "shipped") notifyOrder("shipped", order);
+  void resolveIncidents(
+    order._id,
+    guide ? ["dropi_error", "order_stuck"] : ["dropi_error"],
+    "Resuelta sola: el pedido se creó en Dropi a mano.",
+  );
   return order.toObject();
 }
 
@@ -178,6 +184,9 @@ export async function updateShipping(id: string, body: any) {
     order.history.push(historyEntry(order.status, notes.join(" · ")));
   }
   await order.save();
+  if (order.dropi.guide) {
+    void resolveIncidents(order._id, ["order_stuck"], "Resuelta sola: el pedido ya tiene guía.");
+  }
   // Solo al cambiar de estado: corregir la guía después no reenvía el correo.
   if (order.status !== previous && (order.status === "shipped" || order.status === "delivered")) {
     notifyOrder(order.status, order);
