@@ -380,7 +380,7 @@ export async function confirmPayphone(id: unknown, clientTransactionId: unknown)
       type: "payment_failed",
       severity: "high",
       title: "Payphone no pudo confirmar un pago con tarjeta",
-      detail: `Transacción ${payphoneId} (${txId}): ${error?.message || "sin respuesta"}. Revisa en Payphone si el cobro existe antes de que se reverse.`,
+      detail: `Transacción ${payphoneId} (${txId}): ${String(error?.message || "sin respuesta").replace(/\.+$/, "")}. Revisa en Payphone si el cobro existe antes de que se reverse.`,
       order,
     });
     throw error;
