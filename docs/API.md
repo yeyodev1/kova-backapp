@@ -108,7 +108,9 @@ interface Order {
   paymentMethod: PaymentMethod;
   paymentStatus: "pending" | "paid" | "cod" | "failed" | "refunded";
   status: OrderStatus;
-  transfer: { receiptUrl: string; uploadedAt: string | null; confirmedAt: string | null };
+  channel: "web" | "whatsapp_bot"; // por dónde entró el pedido
+  payToken?: string;         // solo tarjeta: link privado de pago `/pagar/<payToken>` (24+ caracteres URL-safe)
+  transfer: { receiptUrl: string; uploadedAt: string | null; confirmedAt: string | null; bank: string }; // bank: banco elegido por WhatsApp
   dropi: { orderId: number | null; status: string; guide: string; carrier: string; error: string; lastSyncAt: string | null };
   notes: string;
   createdAt: string;
@@ -128,7 +130,8 @@ interface Order {
 | POST | `/checkout/quote` | `{ items: [{ productId, variantId?, quantity }], paymentMethod }` | `{ subtotal, shippingFee, surcharge, total, items: OrderItem[], surcharges: { card, cod, transfer } }` |
 | POST | `/checkout/lead` | `{ phone, firstName?, items }` | `{ ok: true }` (carrito abandonado: recuperación por WhatsApp) |
 | POST | `/orders` | `{ items, paymentMethod, customer, address, notes?, utm? }` | `{ order: Order, payphone?: { token, storeId, clientTransactionId, amount, amountWithoutTax, currency: "USD", reference, email, phoneNumber } }` |
-| POST | `/orders/confirm` | `{ id, clientTransactionId }` | `{ order: Order, approved: boolean }` (idempotente) |
+| POST | `/orders/confirm` | `{ id, clientTransactionId }` | `{ order: Order, approved: boolean }` (idempotente; acepta cualquier `clientTransactionId` del historial del pedido) |
+| GET | `/orders/pay/:token` | — | Link privado de pago (ver abajo). Rate limit 30 / 10 min por IP |
 | POST | `/orders/:number/receipt` | multipart `receipt` + `phone` | `Order` (pasa a `transfer_review`) |
 | GET | `/orders/track` | `?number&phone` | `Order` reducido (número, estado, items, total, guía, transportadora) |
 
@@ -138,6 +141,35 @@ Reglas de `POST /orders`:
 - `cod` → crea en Dropi al instante; si Dropi falla, la orden queda `confirmed` con `dropi.error` y el admin reintenta.
 - `card` → `pending_payment` + config de la Cajita. `transfer` → `awaiting_transfer` + `settings.bankAccounts` en la respuesta del front.
 - Envía correo de confirmación si hay `email` y Resend configurado.
+
+### `GET /orders/pay/:token` (link de pago `/pagar/<token>`)
+
+Lo usa la página `/pagar/:token` de la web. El link lo manda el bot de WhatsApp al confirmar un pedido con
+tarjeta, y también sirve para la web (`order.payToken` viene en la respuesta de `POST /orders` con `card`).
+
+| Caso | HTTP | Respuesta |
+|---|---|---|
+| Pedido pagado (`paymentStatus: "paid"`) | 200 | `{ order: Order, paid: true }` (sin `payphone`) |
+| Tarjeta sin pagar (`pending_payment` o `failed`) | 200 | `{ order: Order, paid: false, payphone: { …misma forma que POST /orders… } }` |
+| Pedido que no es con tarjeta | 409 | `{ message: "Este pedido no se paga con tarjeta" }` |
+| Cancelado | 409 | `{ message: "Este pedido fue cancelado. Escríbenos por WhatsApp si quieres hacerlo de nuevo" }` |
+| Otro estado (ya confirmado/enviado sin pago, etc.) | 409 | `{ message: "Este pedido ya no recibe pagos" }` |
+| Token inexistente o mal formado | 404 | `{ message: "Link de pago no válido" }` |
+| Payphone sin configurar | 503 | `{ message: "El pago con tarjeta no está disponible por ahora" }` |
+
+- Cada llamada sin pagar crea un **intento nuevo**: `payphone.clientTransactionId` nuevo (≤ 50 caracteres,
+  `KV-1007-<base36><hex>`) que se agrega a `payphone.clientTransactionIds` (historial, nunca se borra). Payphone no
+  deja reusar un id, por eso el front debe usar el `clientTransactionId` de ESTA respuesta para abrir la Cajita.
+- Un pedido `failed` (intento rechazado) vuelve a `pending_payment` al abrir el link: puede probar con otra tarjeta.
+- `/pay-response` sigue igual: `POST /orders/confirm` encuentra el pedido por el intento vigente o por cualquiera del
+  historial (el cliente pudo pagar en una pestaña vieja) y es idempotente.
+- Si el cliente cierra la pestaña y escribe "pagado" en WhatsApp, el bot consulta a Payphone cada intento
+  (`GET https://pay.payphonetodoesposible.com/api/Sale/client/<clientTransactionId>`) y confirma con la misma lógica.
+- `Order` público no incluye `payphone` (ni el historial de intentos).
+
+## Bot de WhatsApp
+
+Endpoints `/whatsapp-bot/*` para BuilderBot y `/whatsapp-bot/admin/*` para el panel: ver `docs/WHATSAPP-BOT.md`.
 
 ## SEO
 
