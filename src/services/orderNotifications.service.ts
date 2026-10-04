@@ -191,11 +191,16 @@ function created(order: any, ctx: MailContext): OrderMails {
       (a) => !order.transfer?.bank || a.bank === order.transfer.bank,
     );
     const accounts = chosen.length ? chosen : ctx.bankAccounts || [];
+    // Sin cuentas en Ajustes no se deja al cliente con "a esta cuenta:" y nada debajo.
+    const where = accounts.length
+      ? paragraph(
+          `Transfiere <strong>${money(order.total)}</strong> a ${accounts.length > 1 ? "una de estas cuentas" : "esta cuenta"}:`,
+        ) + accounts.map(bankBox).join("")
+      : paragraph(
+          `Te enviamos por WhatsApp los datos bancarios para transferir <strong>${money(order.total)}</strong>.`,
+        );
     next =
-      paragraph(
-        `Transfiere <strong>${money(order.total)}</strong> a ${accounts.length > 1 ? "una de estas cuentas" : "esta cuenta"}:`,
-      ) +
-      accounts.map(bankBox).join("") +
+      where +
       paragraph(
         "Luego envíanos la foto del comprobante: súbela en la página de tu pedido o mándala por WhatsApp. Apenas la revisemos, despachamos.",
       );
