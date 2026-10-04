@@ -301,7 +301,8 @@ function eventsToMessages(events: any[]): ConversationMessage[] {
     const clientMedia = event.mediaUrl || brain?.mediaUrl || "";
     if (clientText || clientMedia)
       messages.push({
-        id: id(event, "client"),
+        // Mismo id que tenía como /brain suelto: el panel en vivo lo reemplaza sin duplicarlo.
+        id: id(brain || event, "client"),
         at: brain?.createdAt || event.createdAt,
         role: "client",
         text: clientText,
