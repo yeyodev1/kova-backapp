@@ -126,6 +126,14 @@ export function productLine(product: BotProduct, index?: number) {
   return `${prefix}${product.name} — ${from ? "desde " : ""}*${formatCents(product.price)}*${compare}`;
 }
 
+/** Ejemplos de búsqueda con productos reales: las dos primeras palabras de los primeros dos. */
+function examples(catalog: BotProduct[]) {
+  return catalog
+    .slice(0, 2)
+    .map((product) => `"${product.name.split(/\s+/).slice(0, 2).join(" ").toLowerCase()}"`)
+    .join(", ");
+}
+
 /** Resumen del catálogo por categoría, para "qué tienen" o "catálogo". */
 export function catalogOverview(catalog: BotProduct[], storeUrl: string) {
   if (!catalog.length) {
@@ -145,6 +153,6 @@ export function catalogOverview(catalog: BotProduct[], storeUrl: string) {
     "",
     ...lines,
     "",
-    `Dime qué buscas (ej. "licuadora", "parlante bluetooth") y te muestro opciones. También puedes ver todo en ${storeUrl}/tienda`,
+    `Dime qué buscas (ej. ${examples(catalog)}) y te muestro opciones. También puedes ver todo en ${storeUrl}/tienda`,
   ].join("\n");
 }
