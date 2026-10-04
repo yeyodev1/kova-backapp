@@ -690,7 +690,7 @@ export async function sendToDropi(id: string) {
       type: "dropi_error",
       severity: "high",
       title: "Dropi rechazó el pedido",
-      detail: `${message}. Reintenta desde el pedido o créalo a mano en Dropi.`,
+      detail: `${message.replace(/\.+$/, "")}. Reintenta desde el pedido o créalo a mano en Dropi.`,
       order,
     });
     await Order.updateOne(
