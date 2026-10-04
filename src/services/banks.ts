@@ -17,10 +17,10 @@ export interface BankInfo {
 }
 
 export const BANKS: BankInfo[] = [
-  { code: "deuna", name: "Deuna (Banco Pichincha)", domain: "deuna.app", keywords: ["deuna"] },
   { code: "pichincha", name: "Banco Pichincha", domain: "pichincha.com", keywords: ["banco pichincha"], placeWords: ["pichincha"] },
-  { code: "barrio", name: "Banco del Barrio (Guayaquil)", domain: "", keywords: ["banco del barrio"] },
+  { code: "deuna", name: "Deuna (Banco Pichincha)", domain: "deuna.app", keywords: ["deuna"] },
   { code: "guayaquil", name: "Banco Guayaquil", domain: "bancoguayaquil.com", keywords: ["banco guayaquil", "banco de guayaquil", "bg"], placeWords: ["guayaquil"] },
+  { code: "barrio", name: "Banco del Barrio (Guayaquil)", domain: "", keywords: ["banco del barrio"] },
   // Google no tiene ícono de bancodelpacifico.com: el de su banca en línea sí.
   { code: "pacifico", name: "Banco del Pacífico", domain: "intermatico.com", keywords: ["pacifico", "intermatico"] },
   { code: "produbanco", name: "Produbanco", domain: "produbanco.com.ec", keywords: ["produbanco", "produ"] },
@@ -114,10 +114,12 @@ export function bankFromText<T extends BankLike>(
 /** Código del catálogo para un nombre escrito a mano ("Pichincha ahorros" → pichincha). */
 export function guessBankCode(name: string): string {
   const value = ` ${normalize(name)} `;
-  const match = BANKS.find((bank) =>
-    [...bank.keywords, ...(bank.placeWords || [])]
-      .map(normalize)
-      .some((word) => value.includes(` ${word} `)),
-  );
-  return match?.code || OTHER_BANK;
+  // La coincidencia más larga gana: "Banco del Barrio (Guayaquil)" es Barrio, no Guayaquil.
+  let best = { code: OTHER_BANK, length: 0 };
+  for (const bank of BANKS) {
+    for (const word of [...bank.keywords, ...(bank.placeWords || [])].map(normalize)) {
+      if (word.length > best.length && value.includes(` ${word} `)) best = { code: bank.code, length: word.length };
+    }
+  }
+  return best.code;
 }
