@@ -277,6 +277,15 @@ export async function importProduct(dropiId: number, markupPercent?: number) {
   return product.toObject();
 }
 
+/**
+ * Stock para productos cargados a mano o desde "Enviar a Kova": Dropi dibuja el stock en canvas y
+ * no lo podemos leer, así que sin dato el producto nacería agotado y no se podría vender.
+ */
+export const UNKNOWN_STOCK = 50;
+
+/** Desde aquí empiezan los ids de las ubicaciones locales de respaldo (ver seed-locations). */
+export const LOCAL_LOCATION_ID = 900000;
+
 export interface DraftInput {
   dropiId: number;
   title: string;
@@ -384,6 +393,12 @@ export async function syncProducts() {
 export async function syncLocations() {
   const provinces = await dropiService.getProvinces();
   let cities = 0;
+
+  // Con datos reales de Dropi se van las ubicaciones locales de respaldo (seed:locations),
+  // así el checkout no muestra cada provincia dos veces.
+  if (provinces.length) {
+    await Location.deleteMany({ dropiId: { $gte: LOCAL_LOCATION_ID } });
+  }
 
   for (const province of provinces) {
     const provinceId = Number(province?.id);
