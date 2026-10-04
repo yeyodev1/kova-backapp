@@ -31,7 +31,11 @@ export function uploadBuffer(
   ensureConfig();
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
-      { folder, resource_type: "image", transformation: [{ quality: "auto", fetch_format: "auto" }] },
+      {
+        folder,
+        resource_type: "image",
+        transformation: [{ quality: "auto", fetch_format: "auto" }],
+      },
       (error, result?: UploadApiResponse) => {
         if (error || !result) return reject(error || new Error("Cloudinary sin respuesta"));
         resolve({ url: result.secure_url, publicId: result.public_id });
@@ -58,4 +62,25 @@ export async function uploadImage(
 export async function deleteImage(publicId: string): Promise<void> {
   ensureConfig();
   await cloudinary.uploader.destroy(publicId);
+}
+
+/**
+ * Sube un comprobante (imagen o PDF) tal cual llega. Sin transformaciones:
+ * `fetch_format: auto` convertiría el PDF y el comprobante debe quedar íntegro.
+ */
+export function uploadFile(
+  buffer: Buffer,
+  folder = DEFAULT_FOLDER,
+): Promise<{ url: string; publicId: string }> {
+  ensureConfig();
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder, resource_type: "auto" },
+      (error, result?: UploadApiResponse) => {
+        if (error || !result) return reject(error || new Error("Cloudinary sin respuesta"));
+        resolve({ url: result.secure_url, publicId: result.public_id });
+      },
+    );
+    stream.end(buffer);
+  });
 }
