@@ -8,6 +8,7 @@ import locationRoutes from "./location.routes";
 import checkoutRoutes from "./checkout.routes";
 import orderRoutes from "./order.routes";
 import adminRoutes from "./admin.routes";
+import seoRoutes from "./seo.routes";
 
 function routerApi(app: Application) {
   const router = express.Router();
@@ -22,6 +23,7 @@ function routerApi(app: Application) {
   router.use("/checkout", checkoutRoutes);
   router.use("/orders", orderRoutes);
   router.use("/admin", adminRoutes);
+  router.use("/seo", seoRoutes);
 }
 
 export default routerApi;
