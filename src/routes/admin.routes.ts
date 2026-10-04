@@ -65,5 +65,7 @@ router.get("/leads", adminController.listLeads);
 
 router.get("/settings", adminController.getSettings);
 router.put("/settings", adminController.updateSettings);
+router.get("/team", adminController.listTeam);
+router.put("/team/:id", adminController.updateTeamMember);
 
 export default router;
