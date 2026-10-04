@@ -98,6 +98,7 @@ export async function listOrders(query: Record<string, unknown>) {
   const method = String(query.paymentMethod ?? "");
   if (method && (PAYMENT_METHODS as readonly string[]).includes(method))
     filter.paymentMethod = method;
+  if (query.dropiError === "1" || query.dropiError === "true") filter["dropi.error"] = { $nin: ["", null] };
   const q = String(query.q ?? "")
     .trim()
     .slice(0, 80);
@@ -304,7 +305,27 @@ export async function listLeads(query: Record<string, unknown>) {
     Lead.find(filter).sort({ updatedAt: -1 }).skip(skip).limit(limit).lean(),
     Lead.countDocuments(filter),
   ]);
-  return paginated(items, total, page, limit);
+
+  // El lead solo guarda ids: el panel necesita nombre e imagen para escribirle al cliente.
+  const productIds = [...new Set(items.flatMap((l: any) => l.items.map((i: any) => String(i.productId))))];
+  const products = await Product.find({ _id: { $in: productIds } })
+    .select("title images variants._id variants.name")
+    .lean();
+  const byId = new Map(products.map((p: any) => [String(p._id), p]));
+  const enriched = items.map((lead: any) => ({
+    ...lead,
+    items: lead.items.map((item: any) => {
+      const product: any = byId.get(String(item.productId));
+      const variant = product?.variants?.find((v: any) => String(v._id) === String(item.variantId));
+      return {
+        ...item,
+        title: product?.title ?? item.title ?? "Producto",
+        image: product?.images?.[0] ?? "",
+        variantName: variant?.name ?? "",
+      };
+    }),
+  }));
+  return paginated(enriched, total, page, limit);
 }
 
 // ── Configuración ───────────────────────────────────────────────────────────
