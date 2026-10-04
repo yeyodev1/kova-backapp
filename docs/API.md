@@ -139,6 +139,17 @@ Reglas de `POST /orders`:
 - `card` → `pending_payment` + config de la Cajita. `transfer` → `awaiting_transfer` + `settings.bankAccounts` en la respuesta del front.
 - Envía correo de confirmación si hay `email` y Resend configurado.
 
+## SEO
+
+| Método | Ruta | Respuesta |
+|---|---|---|
+| GET | `/seo/sitemap.xml` | XML (`application/xml`, `Cache-Control: public, max-age=3600, s-maxage=3600`) |
+
+- Incluye `/`, `/tienda`, `/rastrear`, las cuatro políticas y cada producto con `isPublished: true` (`/producto/:slug`, `lastmod` = `updatedAt`).
+- Las URLs siempre usan `https://kovashopper.com`. Si cambian los slugs de políticas en el front (`site.ts`), actualizar `STATIC_PATHS` en `seo.service.ts`.
+- El front lo publica como `https://kovashopper.com/sitemap.xml` con un rewrite en su `vercel.json`; `robots.txt` apunta ahí.
+- `GET /products/:slug` además lo consume la Routing Middleware del front para las metas Open Graph al compartir: si cambia la forma de `Product` (`slug`, `title`, `shortDescription`, `images`, `price` en centavos, `stock`, `variants`), revisar `kova-frontapp/seo/injectMeta.ts`.
+
 ## Admin (`authMiddleware` + `adminMiddleware`, prefijo `/admin`)
 
 | Método | Ruta | Uso |
