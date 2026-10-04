@@ -26,7 +26,7 @@ export const botName = () => env.BOT_NAME.trim() || "Kova";
 export const casualMarks = (text: string) => text.replace(/[¿¡]/g, "");
 
 export const ASK_PRODUCT =
-  'Cuéntame qué buscas hoy 🛍️ Puedes escribirme algo como "licuadora" o "parlante bluetooth", mandarme una foto 📸 o pedirme el *catálogo*';
+  "Cuéntame qué buscas hoy 🛍️ Escríbeme el nombre del producto, mándame una foto 📸 o pídeme el *catálogo*";
 
 /** "el bot de *Kova*" o "*Luna* 🤖, el bot de *Kova*" según BOT_NAME. */
 export const selfIntro = () =>
