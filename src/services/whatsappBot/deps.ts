@@ -26,6 +26,7 @@ import type {
   CardCheck,
   CreateOutcome,
   MediaOutcome,
+  OrderQuery,
   OrderSummary,
   QuoteOutcome,
 } from "./types";
@@ -285,11 +286,18 @@ async function checkCardPayment(phone: string, orderId: string): Promise<CardChe
   };
 }
 
-/** Pedidos de este teléfono. Un KV- de otro teléfono no se muestra (privacidad). */
-async function findOrders(phone: string, number?: string): Promise<OrderSummary[]> {
+/**
+ * Pedidos de este teléfono, leídos en vivo de Mongo en cada consulta (sin caché).
+ * Un KV-, cédula o correo de otro teléfono no devuelve nada (privacidad).
+ */
+async function findOrders(phone: string, query: OrderQuery = {}): Promise<OrderSummary[]> {
   if (!phone) return [];
   const filter: Record<string, unknown> = { "customer.phone": phone };
-  if (number) filter.number = number.toUpperCase();
+  if (query.number) filter.number = query.number.toUpperCase();
+  const or: Record<string, string>[] = [];
+  if (query.idNumber) or.push({ "customer.idNumber": query.idNumber });
+  if (query.email) or.push({ "customer.email": query.email.toLowerCase() });
+  if (or.length) filter.$or = or;
   const orders: any[] = await Order.find(filter).sort({ createdAt: -1 }).limit(5).lean();
   return orders.map((order) => ({
     id: String(order._id),
@@ -306,6 +314,15 @@ async function findOrders(phone: string, number?: string): Promise<OrderSummary[
       order.payToken
         ? payLink(order.payToken)
         : "",
+    createdAt: new Date(order.createdAt).toISOString(),
+    phone: order.customer?.phone || phone,
+    items: (order.items || [])
+      .map(
+        (item: any) =>
+          `${item.quantity} x ${item.title}${item.variantName ? ` (${item.variantName})` : ""}`,
+      )
+      .join(", ")
+      .slice(0, 200),
   }));
 }
 
@@ -325,7 +342,7 @@ export async function buildDeps(sessionPhone: string, knownPhone = ""): Promise<
     createOrder: (state) => createBotOrder(state, deps),
     receiveMedia: (orderId, mediaUrl) => receiveMedia(phone, orderId, mediaUrl),
     checkCardPayment: (orderId) => checkCardPayment(phone, orderId),
-    findOrders: (number) => findOrders(phone, number),
+    findOrders: (query) => findOrders(phone, query),
     saveLead: (state) => {
       const leadPhone = normalizeEcPhone(state.phone);
       if (!leadPhone || !state.cart.length) return;
