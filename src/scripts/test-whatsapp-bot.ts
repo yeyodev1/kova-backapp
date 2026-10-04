@@ -8,6 +8,7 @@
 import assert from "assert/strict";
 import * as gemini from "../services/gemini.service";
 import { decideFromSale } from "../services/payphone.service";
+import { bankFromText } from "../services/banks";
 import { BotProduct } from "../services/whatsappBot/catalog";
 import { decideRoute, DECISIONS } from "../services/whatsappBot/decide";
 import {
@@ -117,6 +118,7 @@ const LOCATIONS: LocationIndex = {
 const SURCHARGES = { card: 0, transfer: 150, cod: 300 };
 const BANK_A: BankOption = {
   bank: "Banco Pichincha",
+  bankCode: "pichincha",
   type: "ahorros",
   number: "2201234567",
   holder: "Kova S.A.S.",
@@ -124,6 +126,7 @@ const BANK_A: BankOption = {
 };
 const BANK_B: BankOption = {
   bank: "Banco Guayaquil",
+  bankCode: "guayaquil",
   type: "corriente",
   number: "0019876543",
   holder: "Kova S.A.S.",
@@ -355,6 +358,59 @@ async function main() {
     assert.match(created.reply, /comprobante/);
     assert.equal(receipt.route, "receiptReceived");
     assert.equal(fake.media[0].orderId, "o1");
+  });
+
+  await test("transferencias apagadas: no la ofrece y si la piden avisa que no está activa", async () => {
+    const fake = fakeDeps({ banks: [] });
+    const results = await conversation(fake, ["cargador", "1", ...DATA, "transferencia"]);
+    const payment = results[5];
+    assert.equal(payment.step, "payment");
+    assert.doesNotMatch(payment.reply, /Transferencia/);
+    assert.match(results[6].reply, /no la tenemos activa/);
+    assert.notEqual(results[6].state.paymentMethod, "transfer");
+  });
+
+  await test("transferencia con una sola cuenta: no pregunta el banco y manda esa cuenta", async () => {
+    const fake = fakeDeps({ banks: [BANK_A] });
+    const results = await conversation(fake, ["cargador", "1", ...DATA, "transferencia", "si"]);
+    const summary = results[6];
+    assert.equal(summary.route, "confirmOrder", "salta la pregunta del banco");
+    assert.match(summary.reply, /Banco Pichincha/);
+    assert.match(results[7].reply, /2201234567/);
+    assert.equal(fake.created[0].bankIndex, 0);
+  });
+
+  await test("dos cuentas: 'te pago por Pichincha' elige transferencia y ese banco", async () => {
+    const fake = fakeDeps({ banks: [BANK_A, BANK_B] });
+    const results = await conversation(fake, [
+      "cargador",
+      "1",
+      ...DATA,
+      "te pago por Pichincha",
+      "si",
+    ]);
+    const summary = results[6];
+    assert.equal(summary.route, "confirmOrder", "no vuelve a preguntar el banco");
+    assert.match(summary.reply, /Transferencia bancaria · Banco Pichincha/);
+    assert.match(results[7].reply, /2201234567/);
+    assert.doesNotMatch(results[7].reply, /0019876543/);
+  });
+
+  await test("dos cuentas: elegir el banco por nombre en la pregunta", async () => {
+    const fake = fakeDeps({ banks: [BANK_A, BANK_B] });
+    const results = await conversation(fake, ["cargador", "1", ...DATA, "transferencia", "guayaquil"]);
+    assert.equal(results[6].step, "bank");
+    assert.match(results[6].reply, /A qué banco te queda mejor transferir/);
+    assert.match(results[7].reply, /Transferencia bancaria · Banco Guayaquil/);
+  });
+
+  await test("detector de banco: pago sí, dirección no", () => {
+    const accounts = [BANK_A, BANK_B];
+    assert.equal(bankFromText("te pago por Pichincha", accounts)?.bank, "Banco Pichincha");
+    assert.equal(bankFromText("Quito, Pichincha", accounts), null, "una provincia no es un banco");
+    assert.equal(bankFromText("guayaquil", accounts), null);
+    assert.equal(bankFromText("guayaquil", accounts, true)?.bank, "Banco Guayaquil");
+    assert.equal(bankFromText("deposito en el bg", accounts)?.bank, "Banco Guayaquil");
   });
 
   await test("contra entrega: recargo visible y pedido confirmado", async () => {
