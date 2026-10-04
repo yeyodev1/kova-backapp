@@ -47,4 +47,14 @@ export const env = {
   DROPI_INTEGRATION_KEY: optional("DROPI_INTEGRATION_KEY", ""),
   PAYPHONE_TOKEN: optional("PAYPHONE_TOKEN", ""),
   PAYPHONE_STORE_ID: optional("PAYPHONE_STORE_ID", ""),
+  // Bot de WhatsApp (BuilderBot Cloud + Gemini). Sin GEMINI_API_KEY el bot sigue con reglas.
+  GEMINI_API_KEY: optional("GEMINI_API_KEY", ""),
+  GEMINI_MODEL: optional("GEMINI_MODEL", "gemini-2.5-flash"),
+  BOT_NAME: optional("BOT_NAME", "Kova"),
+  BOT_AI_VOICE: optional("BOT_AI_VOICE", "on"),
+  BOT_SUPPORT_PHONE: optional("BOT_SUPPORT_PHONE", ""),
+  WHATSAPP_BOT_SECRET: optional("WHATSAPP_BOT_SECRET", ""),
+  // Solo fuera de producción: fija el teléfono para probar desde Postman/Telegram.
+  BOT_TEST_PHONE: optional("BOT_TEST_PHONE", ""),
+  PUBLIC_WEB_URL: optional("PUBLIC_WEB_URL", "https://kovashopper.com"),
 } as const;
