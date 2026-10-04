@@ -42,6 +42,8 @@ const corsOptions: cors.CorsOptions = {
 
 export function createApp() {
   const app = express();
+  // Vercel va delante como proxy: sin esto req.ip sería la IP del proxy.
+  app.set("trust proxy", 1);
 
   app.use(cors(corsOptions));
   app.use(express.json({ limit: "50mb" }));
