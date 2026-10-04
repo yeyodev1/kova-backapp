@@ -200,7 +200,8 @@ Cuentas de transferencia y recargos: panel → Configuración (`settings.bankAcc
 
 | Método | Ruta | Respuesta |
 |---|---|---|
-| GET | `/events?phone&page&limit&errors=1&kind` | `{ items: [{ _id, createdAt, phone, endpoint, kind, route, decision, step, message, reply, mediaUrl, orderNumber, duplicated, durationMs, error }], total, page, pages }`. `kind`: `decision` (brain), `turn`, `error`, `human_request` |
+| GET | `/events?phone&page&limit&errors=1&kind` | `{ items: [{ _id, createdAt, phone, endpoint, kind, route, decision, step, message, reply, mediaUrl, orderNumber, paymentLink, duplicated, durationMs, error }], total, page, pages }`. `kind`: `decision` (brain), `turn`, `error`, `human_request` |
+| GET | `/conversations/:phone?before&limit` | Chat completo (ver abajo): `{ phone, session, messages, hasMore, nextBefore }` |
 | GET | `/sessions?page&limit&q` | `{ items: [{ phone, customerName, stage, cart: { items, total, summary }, paymentMethod, orderNumber, silencedUntil, optOut, humanRequested, humanRequestedAt, lastMessage: { role, content, hasMedia, at }, updatedAt }], total, page, pages }`. `q` busca por teléfono, nombre o `KV-` |
 | POST | `/sessions/:phone/reset` | `{ ok, phone }` — vacía carrito y paso (no toca pedidos). 404 si no existe |
 | POST | `/sessions/:phone/silence` | body `{ minutes }` (1–1440, por defecto 60) → `{ ok, phone, silencedUntil }` |
@@ -208,6 +209,26 @@ Cuentas de transferencia y recargos: panel → Configuración (`settings.bankAcc
 | GET | `/config` | `{ botName, aiEnabled, aiModel, aiVoice, secretRequired, supportPhone, payLinkBase, body, headers, endpoints: [{ name, method, url, use }], flows: [...], rules: [...] }` |
 
 `:phone` acepta `0990000001`, `+593990000001` o `lid:…`. La bitácora se borra sola a los 30 días (TTL).
+
+### Conversación (`GET /conversations/:phone`)
+
+Lo que usa la vista `/admin/bot/chat/:phone` del panel (se refresca cada 8 s). Une la bitácora (`BotEvent`, 30 días)
+con el `history` de la sesión (3 días) para los turnos que no quedaron en la bitácora.
+
+- `session`: el mismo resumen de `/sessions` (`customerName`, `stage`, `cart`, `orderNumber`, `silencedUntil`, `optOut`,
+  `humanRequested`, …) o `null` si la sesión ya expiró y solo queda la bitácora. 404 si no hay ni sesión ni eventos.
+- `messages` (cronológico): `{ id, at, role: "client" | "bot" | "system", text, mediaUrl?, kind?, meta?, source }`.
+  - `client`: lo que escribió el cliente (`mediaUrl` si mandó foto/PDF; `text` es `[archivo adjunto]` sin texto).
+  - `bot`: la respuesta del flujo, con `meta: { endpoint, route, decision, step, ms, error, orderNumber, paymentLink,
+    duplicated?, brain?: { route, decision, step, ms } }` (`brain` = lo que decidió `/brain` antes de ese flujo).
+  - `system` con `kind`: `order_created` (`R7:orden_creada`), `payment_link`, `receipt` (`R1:comprobante`),
+    `payment_confirmed`, `human_request`, `silenced` (`/brain` respondió `silenced`: el bot no contestó),
+    `duplicated` (mismo mensaje en < 5 s: misma respuesta), `error` (el flujo falló; `meta.error`).
+  - Un `/brain` sin flujo después sale como mensaje `client` con `meta` del brain (silenciado o aún procesando).
+  - `source: "history"` cuando el turno sale del historial de la sesión y no de la bitácora (sin `meta`).
+  - `id` es estable entre refrescos (el mensaje del cliente usa el id del `/brain`): el panel reemplaza en vez de duplicar.
+- Paginación hacia atrás: `limit` (1–200, por defecto 50) cuenta filas de la bitácora; si `hasMore`, pide la página
+  anterior con `before=<nextBefore>`. El `/brain` de un turno nunca queda en otra página que su respuesta.
 
 ## Logs
 
