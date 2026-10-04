@@ -3,6 +3,7 @@ import { env } from "../config/env";
 import { dbConnect, isConnected } from "../config/mongo";
 import { CustomError } from "../errors/customError.error";
 import * as dropiController from "../controllers/dropi.controller";
+import * as incidentController from "../controllers/incident.controller";
 
 const router = Router();
 
@@ -41,5 +42,8 @@ router.get("/dropi-orders", soloCron, conBaseDeDatos, dropiController.syncOrders
 
 /** GET /api/cron/dropi-products — cada 6 horas: stock y costo. */
 router.get("/dropi-products", soloCron, conBaseDeDatos, dropiController.syncProducts);
+
+/** GET /api/cron/incidents-sweep — cada hora: comprobantes sin revisar y pedidos sin guía. */
+router.get("/incidents-sweep", soloCron, conBaseDeDatos, incidentController.sweep);
 
 export default router;
