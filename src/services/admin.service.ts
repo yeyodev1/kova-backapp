@@ -597,28 +597,7 @@ export async function updateSettings(body: any) {
     }
     update.whatsapp = whatsapp;
   }
-  if (input.bankAccounts !== undefined) {
-    if (!Array.isArray(input.bankAccounts))
-      throw new CustomError("Las cuentas deben ser una lista", 400);
-    update.bankAccounts = input.bankAccounts.slice(0, 10).map((a: any) => ({
-      bank: String(a?.bank ?? "")
-        .trim()
-        .slice(0, 80),
-      type: String(a?.type ?? "")
-        .trim()
-        .slice(0, 40),
-      number: String(a?.number ?? "")
-        .trim()
-        .slice(0, 40),
-      holder: String(a?.holder ?? "")
-        .trim()
-        .slice(0, 120),
-      idNumber: String(a?.idNumber ?? "")
-        .trim()
-        .slice(0, 20),
-    }));
-  }
-
+  // Las cuentas y el interruptor de transferencias se editan solo en /admin/payments.
   await getSettings();
   await Setting.updateOne({ key: "main" }, { $set: update });
   return getAdminSettings();
