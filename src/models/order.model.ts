@@ -93,6 +93,7 @@ export interface IOrder {
     response: unknown;
   };
   utm: Record<string, string>;
+  adTracking: Record<string, string>;
   notes: string;
   /** true cuando ya se descontó stock y se sumó soldCount. */
   stockApplied: boolean;
@@ -177,6 +178,8 @@ const orderSchema = new Schema<IOrder>(
       response: { type: Schema.Types.Mixed, default: null },
     },
     utm: { type: Schema.Types.Mixed, default: {} },
+    // IP, navegador y cookies del píxel (_fbp/_fbc) para la API de Conversiones de Meta.
+    adTracking: { type: Schema.Types.Mixed, default: {} },
     notes: { type: String, default: "" },
     stockApplied: { type: Boolean, default: false },
     history: { type: [historySchema], default: [] },
@@ -198,6 +201,7 @@ export function toPublicOrder(order: any): Record<string, any> {
   delete plain.payphone;
   delete plain.history;
   delete plain.utm;
+  delete plain.adTracking;
   delete plain.stockApplied;
   delete plain.__v;
   if (plain.dropi) {

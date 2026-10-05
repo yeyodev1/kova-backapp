@@ -18,6 +18,7 @@ import { normalizeEcPhone } from "../utils/phone";
 import { buildQuote, parsePaymentMethod, TRANSFERS_OFF } from "./checkout.service";
 import { uploadFile } from "./cloudinary.service";
 import * as dropiService from "./dropi.service";
+import * as metaCapi from "./metaCapi.service";
 import { reportIncident, resolveIncidents } from "./incidents.service";
 import { notifyOrder } from "./orderNotifications.service";
 import * as payphoneService from "./payphone.service";
@@ -185,6 +186,8 @@ export interface CreateOrderOptions {
   channel?: OrderChannel;
   /** Banco que eligió el cliente para transferir (nombre o _id de la cuenta). */
   transferBank?: string;
+  /** Lo arma el controller con la IP y el navegador del request, para la API de Conversiones. */
+  adTracking?: metaCapi.AdTracking;
 }
 
 export async function createOrder(input: any, options: CreateOrderOptions = {}) {
@@ -215,6 +218,7 @@ export async function createOrder(input: any, options: CreateOrderOptions = {}) 
     paymentMethod,
     notes: text(input?.notes, 500),
     utm: parseUtm(input?.utm),
+    adTracking: options.adTracking ?? {},
     channel: ORDER_CHANNELS.includes(options.channel as OrderChannel) ? options.channel : "web",
   };
 
@@ -263,6 +267,10 @@ export async function createOrder(input: any, options: CreateOrderOptions = {}) 
 
   // Web y bot pasan por aquí: un solo correo de "pedido recibido" por pedido.
   notifyOrder("created", order);
+
+  // Igual que el píxel: contra entrega y transferencia cuentan como compra al crearse;
+  // la tarjeta, recién cuando Payphone la aprueba.
+  if (paymentMethod !== "card") await metaCapi.sendPurchase(order);
 
   const response: Record<string, unknown> = { order: toPublicOrder(order) };
 
@@ -411,7 +419,10 @@ export async function confirmPayphone(id: unknown, clientTransactionId: unknown)
     }
     const fresh = await Order.findById(order._id);
     // Solo quien ganó la transición avisa: recargar la respuesta no repite el correo.
-    if (updated) notifyOrder("paid", fresh);
+    if (updated) {
+      notifyOrder("paid", fresh);
+      await metaCapi.sendPurchase(fresh);
+    }
     void resolveIncidents(
       order._id,
       ["payment_failed", "payment_mismatch"],

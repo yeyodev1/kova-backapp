@@ -1,10 +1,13 @@
 import { Request, Response, NextFunction } from "express";
 import * as orderService from "../services/order.service";
+import { parseAdTracking } from "../services/metaCapi.service";
 
-/** POST /api/orders — body: { items, paymentMethod, customer, address, notes?, utm? } */
+/** POST /api/orders — body: { items, paymentMethod, customer, address, notes?, utm?, tracking? } */
 export async function create(req: Request, res: Response, next: NextFunction) {
   try {
-    res.status(201).json(await orderService.createOrder(req.body ?? {}));
+    const body = req.body ?? {};
+    const adTracking = parseAdTracking(body.tracking, req.ip, req.get("user-agent"));
+    res.status(201).json(await orderService.createOrder(body, { adTracking }));
   } catch (error) {
     next(error);
   }

@@ -57,4 +57,9 @@ export const env = {
   // Solo fuera de producción: fija el teléfono para probar desde Postman/Telegram.
   BOT_TEST_PHONE: optional("BOT_TEST_PHONE", ""),
   PUBLIC_WEB_URL: optional("PUBLIC_WEB_URL", "https://kovashopper.com"),
+  // API de Conversiones de Meta: token de Events Manager → píxel → Configuración.
+  // Sin token no se envía nada. TEST_CODE solo para probar en "Eventos de prueba".
+  META_PIXEL_ID: optional("META_PIXEL_ID", ""),
+  META_CAPI_TOKEN: optional("META_CAPI_TOKEN", ""),
+  META_CAPI_TEST_CODE: optional("META_CAPI_TEST_CODE", ""),
 } as const;
