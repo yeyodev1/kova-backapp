@@ -65,6 +65,8 @@ const PAYMENT_EMOJI: Record<BotPaymentMethod, string> = { card: "💳", transfer
 
 export function paymentQuestion(options: BotPaymentMethod[], quote: QuoteSummary) {
   const base = quote.subtotal + quote.shippingFee;
+  // "El mejor precio" solo es cierto si otro método cobra recargo.
+  const othersCostMore = options.some((method) => (quote.surcharges[method] || 0) > 0);
   const lines = options.map((method, index) => {
     const surcharge = quote.surcharges[method] || 0;
     const name =
@@ -73,7 +75,9 @@ export function paymentQuestion(options: BotPaymentMethod[], quote: QuoteSummary
       method === "card"
         ? surcharge
           ? ` (+${formatCents(surcharge)})`
-          : " (el mejor precio)"
+          : othersCostMore
+            ? " (el mejor precio)"
+            : ""
         : method === "cod"
           ? ` (${surcharge ? `+${formatCents(surcharge)}, ` : ""}pagas al recibir)`
           : surcharge
